@@ -8,12 +8,15 @@ import {
   Button,
   Stack,
   Alert,
+  CircularProgress,
 } from "@mui/material"
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { onAuthStateChanged } from "firebase/auth"
 import {
   EmailAuthProvider,
   reauthenticateWithCredential,
   updatePassword,
+  sendEmailVerification,
 } from "firebase/auth"
 import { auth } from "../firebase"
 
@@ -23,6 +26,17 @@ export default function Settings({ onDone }) {
   const [confirmPassword, setConfirmPassword] = useState("")
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
+  const [verificationLoading, setVerificationLoading] = useState(false)
+  const [verificationMessage, setVerificationMessage] = useState("")
+  const [isEmailVerified, setIsEmailVerified] = useState(false)
+
+  // Track email verification status
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setIsEmailVerified(user?.emailVerified || false)
+    })
+    return () => unsubscribe()
+  }, [])
 
   const handleChangePassword = async () => {
     setError("")
@@ -57,11 +71,79 @@ export default function Settings({ onDone }) {
     }
   }
 
+  const handleResendVerification = async () => {
+    setVerificationMessage("")
+    setVerificationLoading(true)
+    
+    try {
+      const user = auth.currentUser
+      if (!user) {
+        setVerificationMessage("ไม่พบผู้ใช้ กรุณาเข้าสู่ระบบใหม่")
+        setVerificationLoading(false)
+        return
+      }
+
+      if (user.emailVerified) {
+        setVerificationMessage("อีเมลของคุณได้รับการยืนยันแล้ว")
+        setVerificationLoading(false)
+        return
+      }
+
+      await sendEmailVerification(user)
+      setVerificationMessage("ส่งอีเมลยืนยันไปยังอีเมลของคุณแล้ว กรุณาตรวจสอบอีเมล")
+      setVerificationLoading(false)
+    } catch (err) {
+      console.error("❌ Failed to send verification email:", err)
+      setVerificationMessage("ไม่สามารถส่งอีเมลยืนยันได้ กรุณาลองใหม่อีกครั้ง")
+      setVerificationLoading(false)
+    }
+  }
+
+  const user = auth.currentUser
+
   return (
     <Box maxWidth={480}>
       <Typography variant="h5" fontWeight={600} mb={2}>
         ตั้งค่าระบบ
       </Typography>
+
+      {/* Email Verification Section */}
+      <Card variant="outlined" sx={{ boxShadow: "none", mb: 2 }}>
+        <CardContent>
+          <Typography fontWeight={600} mb={1}>
+            ยืนยันอีเมล
+          </Typography>
+          
+          <Stack spacing={2}>
+            {!isEmailVerified && (
+              <Alert severity="warning">
+                อีเมลของคุณยังไม่ได้รับการยืนยัน กรุณาตรวจสอบอีเมลและคลิกลิงก์ยืนยัน
+              </Alert>
+            )}
+            
+            {isEmailVerified && (
+              <Alert severity="success">
+                อีเมลของคุณได้รับการยืนยันแล้ว
+              </Alert>
+            )}
+
+            <Button
+              variant="outlined"
+              onClick={handleResendVerification}
+              disabled={verificationLoading || isEmailVerified}
+              startIcon={verificationLoading && <CircularProgress size={16} color="inherit" />}
+            >
+              {verificationLoading ? "กำลังส่ง..." : "ส่งอีเมลยืนยันอีกครั้ง"}
+            </Button>
+
+            {verificationMessage && (
+              <Alert severity={isEmailVerified ? "success" : "info"}>
+                {verificationMessage}
+              </Alert>
+            )}
+          </Stack>
+        </CardContent>
+      </Card>
 
       <Card variant="outlined" sx={{ boxShadow: "none" }}>
         <CardContent>

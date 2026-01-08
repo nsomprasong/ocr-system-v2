@@ -76,6 +76,20 @@ export default function App() {
       }
 
       console.log("✅ User found:", u.email)
+      console.log("📧 Email verified:", u.emailVerified)
+      
+      // ตรวจสอบ email verification
+      if (!u.emailVerified) {
+        console.log("❌ Email not verified - signing out")
+        setUser(null)
+        setLoading(false)
+        // Sign out เพื่อบังคับให้กลับไปหน้า login
+        signOut(auth).catch((err) => {
+          console.error("Error signing out:", err)
+        })
+        return
+      }
+      
       setUser(u)
 
       // ตั้งค่า default values ก่อน

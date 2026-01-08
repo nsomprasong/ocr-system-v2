@@ -17,6 +17,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
+  sendEmailVerification,
 } from "firebase/auth"
 import { auth } from "../firebase"
 import { createUserProfile } from "../services/user.service"
@@ -33,12 +34,64 @@ export default function Login() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [confirm, setConfirm] = useState("")
+  const [needsVerification, setNeedsVerification] = useState(false)
+  const [resendLoading, setResendLoading] = useState(false)
   const timeoutRef = useRef(null)
 
   const resetMsg = () => {
     setError("")
     setSuccess("")
     setLoading(false)
+    setNeedsVerification(false)
+  }
+
+  // ส่งอีเมลยืนยันอีกครั้ง
+  const handleResendVerification = async () => {
+    if (!email || !isValidEmail(email)) {
+      setError("กรุณากรอก Email ที่ถูกต้อง")
+      return
+    }
+
+    setResendLoading(true)
+    setError("")
+    setSuccess("")
+
+    try {
+      // ใช้ currentUser ถ้ามี (หลังจาก login แล้ว)
+      let user = auth.currentUser
+      
+      // ถ้ายังไม่มี currentUser ให้ login ก่อน
+      if (!user) {
+        const result = await signInWithEmailAndPassword(auth, email, password)
+        user = result.user
+      }
+
+      // ตรวจสอบว่ายืนยันแล้วหรือยัง
+      if (user.emailVerified) {
+        setSuccess("อีเมลของคุณได้รับการยืนยันแล้ว คุณสามารถเข้าสู่ระบบได้")
+        setNeedsVerification(false)
+        setResendLoading(false)
+        // Reload หลังจาก 1 วินาที
+        setTimeout(() => {
+          window.location.reload()
+        }, 1000)
+        return
+      }
+
+      await sendEmailVerification(user)
+      setSuccess("ส่งอีเมลยืนยันไปยังอีเมลของคุณแล้ว กรุณาตรวจสอบอีเมล")
+      setResendLoading(false)
+    } catch (err) {
+      console.error("❌ Resend verification error:", err)
+      setResendLoading(false)
+      if (err.code === "auth/wrong-password" || err.code === "auth/user-not-found") {
+        setError("Email หรือ Password ไม่ถูกต้อง")
+      } else if (err.code === "auth/too-many-requests") {
+        setError("ส่งอีเมลบ่อยเกินไป กรุณารอสักครู่แล้วลองอีกครั้ง")
+      } else {
+        setError("ไม่สามารถส่งอีเมลยืนยันได้ กรุณาลองใหม่อีกครั้ง")
+      }
+    }
   }
 
   // Reset loading เมื่อเปลี่ยน mode
@@ -79,7 +132,19 @@ export default function Login() {
       const result = await signInWithEmailAndPassword(auth, email, password)
       console.log("✅ Login successful:", result.user.email)
       console.log("👤 Current user:", auth.currentUser?.email)
-      // ไม่ต้องตรวจสอบ emailVerified - ให้ login ได้เลย
+      console.log("📧 Email verified:", result.user.emailVerified)
+      
+      // ตรวจสอบ email verification
+      if (!result.user.emailVerified) {
+        setLoading(false)
+        setNeedsVerification(true)
+        setError("กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ ตรวจสอบอีเมลของคุณและคลิกลิงก์ยืนยัน")
+        return
+      }
+      
+      // ถ้ายืนยันแล้ว ให้ reset state
+      setNeedsVerification(false)
+      
       // Reset loading ทันที
       setLoading(false)
       
@@ -126,8 +191,17 @@ export default function Login() {
         email: user?.email,
       })
 
-      // ไม่ใช้ email verification แล้ว → ให้สมัครแล้วเข้าใช้งานได้เลย
-      setSuccess("สมัครสมาชิกสำเร็จ! คุณสามารถเข้าสู่ระบบได้เลย")
+      // ส่ง email verification
+      try {
+        await sendEmailVerification(user)
+        console.log("✅ Email verification sent")
+        setSuccess("สมัครสมาชิกสำเร็จ! กรุณาตรวจสอบอีเมลเพื่อยืนยันบัญชีของคุณ")
+      } catch (verifyError) {
+        console.error("❌ Failed to send email verification:", verifyError)
+        // ไม่เป็นไร - ยังให้สมัครสำเร็จ แต่แจ้งเตือน
+        setSuccess("สมัครสมาชิกสำเร็จ! แต่ไม่สามารถส่งอีเมลยืนยันได้ กรุณาลองใหม่อีกครั้ง")
+      }
+      
       setLoading(false)
       
       // 🔥 สร้าง Firestore profile แบบ async (ไม่ block UI)
@@ -188,16 +262,16 @@ export default function Login() {
       return
     }
 
-    setLoading(true)
+      setLoading(true)
     try {
       await sendPasswordResetEmail(auth, email)
       setLoading(false)
-      setSuccess("ส่งลิงก์เปลี่ยนรหัสผ่านแล้ว")
+      setSuccess("ส่งลิงก์เปลี่ยนรหัสผ่านไปยังอีเมลของคุณแล้ว กรุณาตรวจสอบอีเมล")
       setTimeout(() => {
         handleModeChange("login")
         setSuccess("")
         setEmail("")
-      }, 1500)
+      }, 3000)
     } catch (err) {
       console.error("Forgot password error:", err)
       setLoading(false)
@@ -248,11 +322,33 @@ export default function Login() {
               <Button 
                 variant="contained" 
                 onClick={handleLogin}
-                disabled={loading}
+                disabled={loading || resendLoading}
                 startIcon={loading && <CircularProgress size={16} color="inherit" />}
               >
                 {loading ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบ"}
               </Button>
+
+              {needsVerification && (
+                <Box>
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    <Typography variant="body2" fontWeight={600} mb={0.5}>
+                      ยังไม่ได้ยืนยันอีเมล
+                    </Typography>
+                    <Typography variant="body2">
+                      กรุณาตรวจสอบอีเมลของคุณและคลิกลิงก์ยืนยัน หากไม่พบอีเมล สามารถส่งอีกครั้งได้
+                    </Typography>
+                  </Alert>
+                  <Button
+                    variant="outlined"
+                    fullWidth
+                    onClick={handleResendVerification}
+                    disabled={resendLoading || loading}
+                    startIcon={resendLoading && <CircularProgress size={16} color="inherit" />}
+                  >
+                    {resendLoading ? "กำลังส่ง..." : "ส่งอีเมลยืนยันอีกครั้ง"}
+                  </Button>
+                </Box>
+              )}
 
               <Divider />
 

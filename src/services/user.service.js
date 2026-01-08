@@ -70,7 +70,7 @@ export async function createUserProfile(user) {
     const userData = {
       uid: user.uid,
       email: user.email,
-      credits: 100,
+      credits: 50,
       plan: "free",
       status: "active",
       columnConfig: [],

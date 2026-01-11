@@ -1,6 +1,6 @@
 import { auth } from "../firebase"
-import { updateUserCredits } from "../services/user.service"
-import { useState } from "react"
+import { updateUserCredits, getUserProfile } from "../services/user.service"
+import { useState, useEffect } from "react"
 import {
   Box,
   Card,
@@ -31,6 +31,8 @@ import {
   saveExcelToServer,
   saveWordToServer,
 } from "../services/fileExport.service"
+import { routeOCR } from "../services/ocr.router"
+import DocumentCanvas from "../components/DocumentCanvas"
 
 export default function Export({
   scanFiles,
@@ -45,6 +47,23 @@ export default function Export({
   const [progress, setProgress] = useState(0)
   const [currentFile, setCurrentFile] = useState("")
   const [error, setError] = useState("")
+  const [templateModeEnabled, setTemplateModeEnabled] = useState(false)
+  const [ocrResults, setOcrResults] = useState([])
+  const [previewFileIndex, setPreviewFileIndex] = useState(null)
+
+  // Check if template mode is enabled
+  useEffect(() => {
+    const user = auth.currentUser
+    if (user) {
+      getUserProfile(user.uid)
+        .then((profile) => {
+          setTemplateModeEnabled(profile?.enableTemplateMode === true)
+        })
+        .catch(() => {
+          setTemplateModeEnabled(false)
+        })
+    }
+  }, [])
 
   const totalPages = scanFiles.reduce((s, f) => s + f.pageCount, 0)
   const creditEnough = credits >= totalPages
@@ -59,6 +78,7 @@ export default function Export({
     setProgress(0)
     setError("")
     setCurrentFile("กำลังเริ่มต้น...")
+    setOcrResults([]) // Clear previous OCR results
 
     try {
       console.log(`🚀 Starting export process...`)
@@ -100,22 +120,45 @@ export default function Export({
         console.log(`📄 Processing file ${i + 1}/${scanFiles.length}: ${fileItem.originalName}`)
 
         try {
-          // เรียก OCR พร้อม timeout (เหมือน Python script - ได้ text กลับมา)
+          // เรียก OCR - ใช้ router เพื่อเลือก v1 หรือ v2 ตาม template mode
           console.log(`🔍 Starting OCR for: ${fileItem.originalName}`)
-          const ocrResult = await Promise.race([
-            ocrFile(fileItem.file),
-            new Promise((_, reject) => 
-              setTimeout(() => reject(new Error("OCR timeout: เกิน 5 นาที")), 5 * 60 * 1000)
-            )
-          ])
-          
-          // ตรวจสอบว่า ocrResult เป็น string หรือไม่
-          const ocrText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "")
+          let ocrText
+          let ocrResultV2 = null
+
+          if (templateModeEnabled) {
+            // Template Mode: Use OCR v2 router (returns OCRResult)
+            const user = auth.currentUser
+            ocrResultV2 = await Promise.race([
+              routeOCR(fileItem.file, user ? { enableTemplateMode: true } : null, null),
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error("OCR timeout: เกิน 5 นาที")), 5 * 60 * 1000)
+              )
+            ])
+            // Store OCR result for preview
+            if (ocrResultV2) {
+              setOcrResults((prev) => [...prev, ocrResultV2])
+              // Extract text from OCRResult for v1 compatibility
+              ocrText = ocrResultV2.words.map((w) => w.text).join(" ")
+            } else {
+              ocrText = ""
+            }
+          } else {
+            // Standard Mode: Use OCR v1 (returns text string)
+            const ocrResult = await Promise.race([
+              ocrFile(fileItem.file),
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error("OCR timeout: เกิน 5 นาที")), 5 * 60 * 1000)
+              )
+            ])
+            // ตรวจสอบว่า ocrResult เป็น string หรือไม่
+            ocrText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "")
+          }
           
           console.log(`✅ OCR completed for: ${fileItem.originalName}`)
-          console.log(`📄 OCR result type:`, typeof ocrResult)
           console.log(`📄 OCR text length: ${ocrText?.length || 0}`)
-          console.log(`📄 OCR text preview (first 200 chars):`, typeof ocrText === "string" ? ocrText.substring(0, 200) : "(not a string)")
+          if (templateModeEnabled && ocrResultV2) {
+            console.log(`📄 OCR v2: ${ocrResultV2.words.length} words found`)
+          }
 
           // ตรวจสอบว่า ocrText เป็น string และไม่ว่าง
           if (!ocrText || typeof ocrText !== "string" || ocrText.trim().length === 0) {
@@ -324,6 +367,46 @@ export default function Export({
               />
             </CardContent>
           </Card>
+
+          {/* OCR Preview (Template Mode v2) */}
+          {templateModeEnabled && ocrResults.length > 0 && (
+            <Card variant="outlined">
+              <CardContent>
+                <Typography variant="body2" fontWeight={500} gutterBottom>
+                  OCR Preview (Template Mode v2)
+                </Typography>
+                <Stack spacing={2}>
+                  {scanFiles.map((fileItem, index) => {
+                    const ocrResult = ocrResults[index]
+                    if (!ocrResult) return null
+                    
+                    return (
+                      <Box key={index}>
+                        <Typography variant="caption" color="text.secondary" gutterBottom>
+                          {fileItem.originalName} ({ocrResult.words.length} words)
+                        </Typography>
+                        <Box
+                          sx={{
+                            border: "1px solid #e2e8f0",
+                            borderRadius: 1,
+                            overflow: "hidden",
+                            maxWidth: "100%",
+                          }}
+                        >
+                          <DocumentCanvas
+                            imageSource={fileItem.file}
+                            ocrResult={ocrResult}
+                            showText={false}
+                            width="100%"
+                          />
+                        </Box>
+                      </Box>
+                    )
+                  })}
+                </Stack>
+              </CardContent>
+            </Card>
+          )}
 
           {/* File Preview (Compact) */}
           <Card variant="outlined">

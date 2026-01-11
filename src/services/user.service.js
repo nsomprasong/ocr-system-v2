@@ -4,31 +4,45 @@ import { db } from "../firebase"
 // โหลด profile
 export async function getUserProfile(uid) {
   try {
-    // ลอง enable network ก่อน (ถ้ายัง offline)
-    try {
-      await enableNetwork(db)
-    } catch {
-      // ไม่เป็นไร - อาจจะ enable อยู่แล้ว
-    }
-    
     const ref = doc(db, "users", uid)
-    const snap = await getDoc(ref)
+    
+    // ใช้ timeout เพื่อป้องกันการค้าง
+    const snap = await Promise.race([
+      getDoc(ref),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("getUserProfile timeout: เกิน 5 วินาที")), 5000)
+      )
+    ])
+    
     if (!snap.exists()) return null
     return snap.data()
   } catch (error) {
+    // Ignore Firestore internal assertion errors
+    if (error.message && (
+      error.message.includes("INTERNAL ASSERTION") || 
+      error.message.includes("Unexpected state")
+    )) {
+      console.warn("⚠️ Firestore internal assertion error in getUserProfile - ignoring")
+      return null
+    }
+    
     console.error("Error getting user profile:", error)
+    
     // ถ้า offline หรือ error ให้ return null (จะสร้างใหม่)
     if (error.code === "unavailable" || error.message?.includes("offline")) {
       console.warn("⚠️ Firestore is offline - using default values")
-      // ลอง enable network อีกครั้ง
-      try {
-        await enableNetwork(db)
-      } catch {
-        // ไม่เป็นไร
-      }
       return null
     }
-    throw error
+    
+    // สำหรับ timeout errors
+    if (error.message?.includes("timeout")) {
+      console.warn("⚠️ getUserProfile timeout - using default values")
+      return null
+    }
+    
+    // Throw error เฉพาะกรณีที่สำคัญจริงๆ
+    // แต่ส่วนใหญ่จะ return null เพื่อให้ app ทำงานต่อได้
+    return null
   }
 }
 
@@ -52,7 +66,8 @@ export async function createUserProfile(user) {
         const existingData = existingSnap.data()
         console.log(`ℹ️ User profile already exists in Firestore`)
         console.log(`📊 Existing data:`, existingData)
-        return // ไม่ต้องสร้างใหม่
+        console.log(`💳 Existing credits:`, existingData.credits)
+        return // ไม่ต้องสร้างใหม่ - ใช้ข้อมูลเดิม
       }
     } catch (checkError) {
       console.log(`ℹ️ Could not check existing document (will create new):`, checkError.message)
@@ -70,7 +85,7 @@ export async function createUserProfile(user) {
     const userData = {
       uid: user.uid,
       email: user.email,
-      credits: 50,
+      credits: 100, // เปลี่ยนจาก 50 เป็น 100 เพื่อให้ตรงกับ default ใน App.jsx
       plan: "free",
       status: "active",
       columnConfig: [],
@@ -298,4 +313,14 @@ export async function updateColumnConfig(uid, columnConfig) {
     columnConfig,
     updatedAt: serverTimestamp(),
   })
+}
+
+// อัปเดต Template Mode (v2) setting
+export async function updateTemplateMode(uid, enableTemplateMode) {
+  const ref = doc(db, "users", uid)
+  await updateDoc(ref, {
+    enableTemplateMode,
+    updatedAt: serverTimestamp(),
+  })
+  console.log(`✅ Template Mode updated: ${enableTemplateMode}`)
 }

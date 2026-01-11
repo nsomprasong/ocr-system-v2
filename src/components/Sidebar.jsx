@@ -1,52 +1,116 @@
+// src/components/Sidebar.jsx
+import { useState, useEffect } from "react"
 import {
   Box,
   List,
+  ListItem,
   ListItemButton,
+  ListItemIcon,
   ListItemText,
   Typography,
   Divider,
   Button,
 } from "@mui/material"
-import { signOut } from "firebase/auth"
+import HomeIcon from "@mui/icons-material/Home"
+import SettingsIcon from "@mui/icons-material/Settings"
+import ScannerIcon from "@mui/icons-material/Scanner"
+import DescriptionIcon from "@mui/icons-material/Description"
+import LogoutIcon from "@mui/icons-material/Logout"
 import { auth } from "../firebase"
+import { getUserProfile } from "../services/user.service"
 
-export default function Sidebar({ page, onNavigate, credits }) {
+export default function Sidebar({ page, onNavigate, onLogout }) {
   const user = auth.currentUser
+  const [credits, setCredits] = useState(0)
+  const [loadingCredits, setLoadingCredits] = useState(true)
+
+  // โหลด credits จาก Firebase
+  useEffect(() => {
+    let isMounted = true
+    
+    if (!user) {
+      setCredits(0)
+      setLoadingCredits(false)
+      return
+    }
+
+    const loadCredits = async () => {
+      try {
+        setLoadingCredits(true)
+        // getUserProfile มี timeout อยู่แล้ว ไม่ต้องใช้ Promise.race อีก
+        const profile = await getUserProfile(user.uid)
+        
+        if (isMounted) {
+          if (profile && profile.credits !== undefined) {
+            setCredits(profile.credits)
+          } else {
+            setCredits(0)
+          }
+          setLoadingCredits(false)
+        }
+      } catch (error) {
+        // getUserProfile จะ return null แทน throw สำหรับ internal assertion errors
+        // แต่ถ้ายังมี error อื่นๆ ให้ handle ไว้
+        console.error("Error loading credits:", error)
+        if (isMounted) {
+          setCredits(0)
+          setLoadingCredits(false)
+        }
+      }
+    }
+
+    loadCredits()
+
+    // Refresh credits ทุก 10 วินาที
+    const interval = setInterval(() => {
+      if (isMounted && user) {
+        loadCredits()
+      }
+    }, 10000)
+
+    return () => {
+      isMounted = false
+      clearInterval(interval)
+    }
+  }, [user])
 
   const menu = [
-    { key: "scan", label: "สแกนเอกสาร" },
-    { key: "excel", label: "ตั้งค่าคอลัมน์" },
-    { key: "settings", label: "ตั้งค่าระบบ" },
+    { key: "scan", label: "สแกนเอกสาร", icon: <ScannerIcon /> },
+    { key: "template-settings", label: "ตั้งค่าเทมเพลต", icon: <DescriptionIcon /> },
+    { key: "settings", label: "ตั้งค่า", icon: <SettingsIcon /> },
   ]
 
   return (
     <Box
       sx={{
+        position: "fixed",
+        left: 0,
+        top: 0,
         width: 240,
+        height: "100vh",
         bgcolor: "#1e293b",
         color: "#fff",
         display: "flex",
         flexDirection: "column",
+        borderRight: "1px solid #334155",
+        zIndex: 1000,
       }}
     >
-      {/* ===== Header ===== */}
-      <Box sx={{ p: 2 }}>
-        <Typography variant="h6">OCR SYSTEM</Typography>
-
+      {/* Header */}
+      <Box sx={{ p: 3, borderBottom: "1px solid #334155" }}>
+        <Typography variant="h6" fontWeight={700} sx={{ color: "#ffffff", mb: 1 }}>
+          OCR System v2
+        </Typography>
         {user && (
           <Box>
             <Typography
               fontSize={12}
-              sx={{ mt: 0.5, opacity: 0.8, wordBreak: "break-all" }}
+              sx={{ opacity: 0.8, wordBreak: "break-all", color: "#94a3b8" }}
             >
               {user.email}
             </Typography>
-
-            <Typography
-              fontSize={12}
-              sx={{ mt: 0.5, opacity: 0.8 }}
-            >
-              เครดิตคงเหลือ: {credits} หน้า
+            <Typography fontSize={12} sx={{ mt: 0.5, opacity: 0.8, color: "#94a3b8" }}>
+              {loadingCredits ? "กำลังโหลด..." : `Credits: ${credits || 0} pages`}
             </Typography>
           </Box>
         )}
@@ -54,47 +118,67 @@ export default function Sidebar({ page, onNavigate, credits }) {
 
       <Divider sx={{ borderColor: "#334155" }} />
 
-      {/* ===== Menu ===== */}
-      <List sx={{ flex: 1, p: 1 }}>
-        {menu.map((m) => (
-          <ListItemButton
-            key={m.key}
-            selected={page === m.key}
-            onClick={() => onNavigate(m.key)}
-            sx={{
-              borderRadius: 1,
-              mb: 0.5,
-              color: "#e5e7eb",
-              "&.Mui-selected": {
-                bgcolor: "#334155",
-              },
-            }}
-          >
-            <ListItemText primary={m.label} />
-          </ListItemButton>
+      {/* Menu */}
+      <List sx={{ flex: 1, p: 1.5 }}>
+        {menu.map((m, index) => (
+          <Box key={m.key}>
+            <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <ListItemButton
+                onClick={() => onNavigate(m.key)}
+                selected={page === m.key}
+                sx={{
+                  borderRadius: 2,
+                  transition: "all 0.2s ease",
+                  "&.Mui-selected": {
+                    bgcolor: "#3b82f6",
+                    background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",
+                    "&:hover": {
+                      bgcolor: "#2563eb",
+                      background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+                    },
+                  },
+                  "&:hover": {
+                    bgcolor: "#334155",
+                    transform: "translateX(4px)",
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ color: "#fff", minWidth: 40 }}>
+                  {m.icon}
+                </ListItemIcon>
+                <ListItemText primary={m.label} />
+              </ListItemButton>
+            </ListItem>
+            {index < menu.length - 1 && (
+              <Divider sx={{ borderColor: "#334155", my: 0.5 }} />
+            )}
+          </Box>
         ))}
       </List>
 
       <Divider sx={{ borderColor: "#334155" }} />
 
-      {/* ===== Logout ===== */}
-      <Box sx={{ p: 2 }}>
-        <Button
-          fullWidth
-          size="small"
-          variant="outlined"
-          sx={{
-            color: "#fca5a5",
-            borderColor: "#fca5a5",
-          }}
-          onClick={async () => {
-            await signOut(auth)
-            window.location.reload()
-          }}
-        >
-          ออกจากระบบ
-        </Button>
-      </Box>
+      {/* Logout */}
+      {onLogout && (
+        <Box sx={{ p: 2 }}>
+          <Button
+            fullWidth
+            variant="outlined"
+            startIcon={<LogoutIcon />}
+            onClick={onLogout}
+            sx={{
+              color: "#fca5a5",
+              borderColor: "#fca5a5",
+              "&:hover": {
+                borderColor: "#f87171",
+                bgcolor: "rgba(252, 165, 165, 0.1)",
+              },
+            }}
+          >
+            ออกจากระบบ
+          </Button>
+        </Box>
+      )}
     </Box>
   )
 }

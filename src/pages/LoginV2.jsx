@@ -25,7 +25,10 @@ import { createUserProfile } from "../services/user.service"
 const isValidEmail = (email) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 
-export default function Login() {
+/**
+ * Login V2 - Uses v1 login logic exactly, with v2 UI design
+ */
+export default function LoginV2() {
   const [mode, setMode] = useState("login")
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
@@ -115,8 +118,7 @@ export default function Login() {
       // Reset loading เมื่อ component unmount (เช่น เมื่อ login สำเร็จ)
       setLoading(false)
     }
-  }, []) // Empty dependency array - ไม่มี dependencies
-
+  }, [])
 
   // ===== LOGIN =====
   const handleLogin = async () => {
@@ -262,7 +264,7 @@ export default function Login() {
       return
     }
 
-      setLoading(true)
+    setLoading(true)
     try {
       await sendPasswordResetEmail(auth, email)
       setLoading(false)
@@ -288,169 +290,237 @@ export default function Login() {
   }
 
   return (
-    <Container maxWidth="sm" sx={{ mt: 10 }}>
-      <Card variant="outlined">
-        <CardContent>
-          <Typography variant="h5" fontWeight={600} mb={1}>
-            OCR SYSTEM
-          </Typography>
-          <Typography color="text.secondary" mb={2}>
-            {mode === "login" && "เข้าสู่ระบบ"}
-            {mode === "register" && "สมัครสมาชิก"}
-            {mode === "forgot" && "ลืมรหัสผ่าน"}
-          </Typography>
+    <Box
+      sx={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+        p: 3,
+      }}
+    >
+      <Container maxWidth="sm">
+        <Card
+          sx={{
+            boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+            borderRadius: 3,
+          }}
+        >
+          <CardContent sx={{ p: 4 }}>
+            <Typography variant="h4" fontWeight={700} sx={{ color: "#1e293b", mb: 1 }}>
+              OCR System v2
+            </Typography>
+            <Typography variant="body2" sx={{ color: "#64748b", mb: 3 }}>
+              {mode === "login" && "เข้าสู่ระบบ"}
+              {mode === "register" && "สมัครสมาชิก"}
+              {mode === "forgot" && "ลืมรหัสผ่าน"}
+            </Typography>
 
-          {error && <Alert severity="error">{error}</Alert>}
-          {success && <Alert severity="success">{success}</Alert>}
+            {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+            {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
 
-          {/* LOGIN */}
-          {mode === "login" && (
-            <Stack spacing={2} mt={2}>
-              <TextField
-                label="Email"
-                size="small"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-              <TextField
-                label="Password"
-                type="password"
-                size="small"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !loading && !resendLoading) {
-                    handleLogin()
-                  }
-                }}
-              />
-              <Button 
-                variant="contained" 
-                onClick={handleLogin}
-                disabled={loading || resendLoading}
-                startIcon={loading && <CircularProgress size={16} color="inherit" />}
-              >
-                {loading ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบ"}
-              </Button>
+            {/* LOGIN */}
+            {mode === "login" && (
+              <Stack spacing={2}>
+                <TextField
+                  label="Email"
+                  size="small"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  fullWidth
+                />
+                <TextField
+                  label="Password"
+                  type="password"
+                  size="small"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !loading && !resendLoading) {
+                      handleLogin()
+                    }
+                  }}
+                  fullWidth
+                />
+                <Button 
+                  variant="contained" 
+                  onClick={handleLogin}
+                  disabled={loading || resendLoading}
+                  fullWidth
+                  size="large"
+                  sx={{
+                    py: 1.5,
+                    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                    textTransform: "none",
+                    "&:hover": {
+                      background: "linear-gradient(135deg, #5568d3 0%, #6a3f8f 100%)",
+                    },
+                  }}
+                  startIcon={loading && <CircularProgress size={16} color="inherit" />}
+                >
+                  {loading ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบ"}
+                </Button>
 
-              {needsVerification && (
-                <Box>
-                  <Alert severity="warning" sx={{ mb: 2 }}>
-                    <Typography variant="body2" fontWeight={600} mb={0.5}>
-                      ยังไม่ได้ยืนยันอีเมล
-                    </Typography>
-                    <Typography variant="body2">
-                      กรุณาตรวจสอบอีเมลของคุณและคลิกลิงก์ยืนยัน หากไม่พบอีเมล สามารถส่งอีกครั้งได้
-                    </Typography>
-                  </Alert>
-                  <Button
-                    variant="outlined"
-                    fullWidth
-                    onClick={handleResendVerification}
-                    disabled={resendLoading || loading}
-                    startIcon={resendLoading && <CircularProgress size={16} color="inherit" />}
+                {needsVerification && (
+                  <Box>
+                    <Alert severity="warning" sx={{ mb: 2 }}>
+                      <Typography variant="body2" fontWeight={600} mb={0.5}>
+                        ยังไม่ได้ยืนยันอีเมล
+                      </Typography>
+                      <Typography variant="body2">
+                        กรุณาตรวจสอบอีเมลของคุณและคลิกลิงก์ยืนยัน หากไม่พบอีเมล สามารถส่งอีกครั้งได้
+                      </Typography>
+                    </Alert>
+                    <Button
+                      variant="outlined"
+                      fullWidth
+                      onClick={handleResendVerification}
+                      disabled={resendLoading || loading}
+                      startIcon={resendLoading && <CircularProgress size={16} color="inherit" />}
+                    >
+                      {resendLoading ? "กำลังส่ง..." : "ส่งอีเมลยืนยันอีกครั้ง"}
+                    </Button>
+                  </Box>
+                )}
+
+                <Divider />
+
+                <Box display="flex" justifyContent="space-between">
+                  <Link 
+                    component="button" 
+                    onClick={() => handleModeChange("register")}
+                    sx={{ color: "#667eea", textDecoration: "none", cursor: "pointer" }}
                   >
-                    {resendLoading ? "กำลังส่ง..." : "ส่งอีเมลยืนยันอีกครั้ง"}
-                  </Button>
+                    สมัครสมาชิก
+                  </Link>
+                  <Link 
+                    component="button" 
+                    onClick={() => handleModeChange("forgot")}
+                    sx={{ color: "#667eea", textDecoration: "none", cursor: "pointer" }}
+                  >
+                    ลืมรหัสผ่าน
+                  </Link>
                 </Box>
-              )}
+              </Stack>
+            )}
 
-              <Divider />
-
-              <Box display="flex" justifyContent="space-between">
-                <Link component="button" onClick={() => handleModeChange("register")}>
-                  สมัครสมาชิก
+            {/* REGISTER */}
+            {mode === "register" && (
+              <Stack spacing={2}>
+                <TextField
+                  label="Email"
+                  size="small"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !loading) {
+                      e.target.blur() // Move focus to next field
+                    }
+                  }}
+                  fullWidth
+                />
+                <TextField
+                  label="Password"
+                  type="password"
+                  size="small"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !loading) {
+                      e.target.blur() // Move focus to next field
+                    }
+                  }}
+                  fullWidth
+                />
+                <TextField
+                  label="ยืนยัน Password"
+                  type="password"
+                  size="small"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !loading) {
+                      handleRegister()
+                    }
+                  }}
+                  fullWidth
+                />
+                <Button 
+                  variant="contained" 
+                  onClick={handleRegister}
+                  disabled={loading}
+                  fullWidth
+                  size="large"
+                  sx={{
+                    py: 1.5,
+                    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                    textTransform: "none",
+                    "&:hover": {
+                      background: "linear-gradient(135deg, #5568d3 0%, #6a3f8f 100%)",
+                    },
+                  }}
+                  startIcon={loading && <CircularProgress size={16} color="inherit" />}
+                >
+                  {loading ? "กำลังสมัครสมาชิก..." : "สมัครสมาชิก"}
+                </Button>
+                <Divider />
+                <Link 
+                  component="button" 
+                  onClick={() => handleModeChange("login")}
+                  sx={{ color: "#667eea", textDecoration: "none", cursor: "pointer", textAlign: "center" }}
+                >
+                  กลับไปหน้า Login
                 </Link>
-                <Link component="button" onClick={() => handleModeChange("forgot")}>
-                  ลืมรหัสผ่าน
+              </Stack>
+            )}
+
+            {/* FORGOT */}
+            {mode === "forgot" && (
+              <Stack spacing={2}>
+                <TextField
+                  label="Email"
+                  size="small"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !loading) {
+                      handleForgot()
+                    }
+                  }}
+                  fullWidth
+                />
+                <Button 
+                  variant="contained" 
+                  onClick={handleForgot}
+                  disabled={loading}
+                  fullWidth
+                  size="large"
+                  sx={{
+                    py: 1.5,
+                    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                    textTransform: "none",
+                    "&:hover": {
+                      background: "linear-gradient(135deg, #5568d3 0%, #6a3f8f 100%)",
+                    },
+                  }}
+                  startIcon={loading && <CircularProgress size={16} color="inherit" />}
+                >
+                  {loading ? "กำลังส่ง..." : "ส่งลิงก์เปลี่ยนรหัสผ่าน"}
+                </Button>
+                <Divider />
+                <Link 
+                  component="button" 
+                  onClick={() => handleModeChange("login")}
+                  sx={{ color: "#667eea", textDecoration: "none", cursor: "pointer", textAlign: "center" }}
+                >
+                  กลับไปหน้า Login
                 </Link>
-              </Box>
-            </Stack>
-          )}
-
-          {/* REGISTER */}
-          {mode === "register" && (
-            <Stack spacing={2} mt={2}>
-              <TextField
-                label="Email"
-                size="small"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !loading) {
-                    e.target.blur() // Move focus to next field
-                  }
-                }}
-              />
-              <TextField
-                label="Password"
-                type="password"
-                size="small"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !loading) {
-                    e.target.blur() // Move focus to next field
-                  }
-                }}
-              />
-              <TextField
-                label="ยืนยัน Password"
-                type="password"
-                size="small"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !loading) {
-                    handleRegister()
-                  }
-                }}
-              />
-              <Button 
-                variant="contained" 
-                onClick={handleRegister}
-                disabled={loading}
-                startIcon={loading && <CircularProgress size={16} color="inherit" />}
-              >
-                {loading ? "กำลังสมัครสมาชิก..." : "สมัครสมาชิก"}
-              </Button>
-              <Divider />
-              <Link component="button" onClick={() => handleModeChange("login")}>
-                กลับไปหน้า Login
-              </Link>
-            </Stack>
-          )}
-
-          {/* FORGOT */}
-          {mode === "forgot" && (
-            <Stack spacing={2} mt={2}>
-              <TextField
-                label="Email"
-                size="small"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !loading) {
-                    handleForgot()
-                  }
-                }}
-              />
-              <Button 
-                variant="contained" 
-                onClick={handleForgot}
-                disabled={loading}
-                startIcon={loading && <CircularProgress size={16} color="inherit" />}
-              >
-                {loading ? "กำลังส่ง..." : "ส่งลิงก์เปลี่ยนรหัสผ่าน"}
-              </Button>
-              <Divider />
-              <Link component="button" onClick={() => handleModeChange("login")}>
-                กลับไปหน้า Login
-              </Link>
-            </Stack>
-          )}
-        </CardContent>
-      </Card>
-    </Container>
+              </Stack>
+            )}
+          </CardContent>
+        </Card>
+      </Container>
+    </Box>
   )
 }

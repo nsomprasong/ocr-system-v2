@@ -9,6 +9,8 @@ import {
   Stack,
   Alert,
   CircularProgress,
+  Switch,
+  FormControlLabel,
 } from "@mui/material"
 import { useState, useEffect } from "react"
 import { onAuthStateChanged } from "firebase/auth"
@@ -19,6 +21,7 @@ import {
   sendEmailVerification,
 } from "firebase/auth"
 import { auth } from "../firebase"
+import { getUserProfile } from "../services/user.service"
 
 export default function Settings({ onDone }) {
   const [currentPassword, setCurrentPassword] = useState("")

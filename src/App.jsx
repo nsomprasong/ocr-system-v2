@@ -7,15 +7,14 @@ import {
   createUserProfile,
 } from "./services/user.service"
 
-import AppLayout from "./components/AppLayout"
-import Login from "./pages/Login"
-import Scan from "./pages/Scan"
-import ExcelMode from "./pages/ExcelMode"
-import Export from "./pages/Export"
+import AppLayoutV2 from "./components/AppLayoutV2"
+import LoginV2 from "./pages/LoginV2"
 import Settings from "./pages/Settings"
+import DocumentTemplateSettings from "./pages/DocumentTemplateSettings"
+import Scan from "./pages/Scan"
 
 export default function App() {
-  const [page, setPage] = useState("scan")
+  const [page, setPage] = useState("home")
 
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -115,33 +114,60 @@ export default function App() {
         }
         
         if (!profile) {
-          console.log("🆕 Creating new profile in background...")
-          // สร้าง profile แบบ background (ไม่ block)
-          createUserProfile(u).then(() => {
-            console.log("✅ Profile created in background")
-            // ลอง get อีกครั้ง
-            getUserProfile(u.uid).then((newProfile) => {
-              if (newProfile) {
-                setCredits(newProfile.credits || 100)
-                if (newProfile.columnConfig?.length) {
-                  setColumnConfig(newProfile.columnConfig)
+          console.log("🆕 No profile found - checking if profile exists before creating...")
+          
+          // ลอง get อีกครั้งเพื่อยืนยันว่าจริงๆ ไม่มี profile (ไม่ใช่ internal assertion error)
+          // รอสักครู่เพื่อให้ Firestore sync
+          setTimeout(async () => {
+            try {
+              const retryProfile = await Promise.race([
+                getUserProfile(u.uid),
+                new Promise((resolve) => setTimeout(() => resolve(null), 3000))
+              ])
+              
+              if (retryProfile) {
+                console.log("✅ Profile found on retry - using existing profile")
+                setCredits(retryProfile.credits || 100)
+                if (retryProfile.columnConfig?.length) {
+                  setColumnConfig(retryProfile.columnConfig)
                 }
-                console.log("✅ Profile loaded from Firestore")
+              } else {
+                console.log("🆕 Creating new profile in background...")
+                // สร้าง profile แบบ background (ไม่ block)
+                createUserProfile(u).then(() => {
+                  console.log("✅ Profile created in background")
+                  // ลอง get อีกครั้ง
+                  getUserProfile(u.uid).then((newProfile) => {
+                    if (newProfile) {
+                      setCredits(newProfile.credits || 100)
+                      if (newProfile.columnConfig?.length) {
+                        setColumnConfig(newProfile.columnConfig)
+                      }
+                      console.log("✅ Profile loaded from Firestore")
+                    }
+                  }).catch(() => {
+                    // ไม่เป็นไร - ยังใช้ default values
+                  })
+                }).catch((createError) => {
+                  console.error("❌ Error creating profile:", createError)
+                  // ไม่เป็นไร - ใช้ default values
+                })
               }
-            }).catch(() => {
-              // ไม่เป็นไร - ยังใช้ default values
-            })
-          }).catch((createError) => {
-            console.error("❌ Error creating profile:", createError)
-            // ไม่เป็นไร - ใช้ default values
-          })
+            } catch (retryError) {
+              console.warn("⚠️ Retry failed, will create new profile:", retryError.message)
+              // ถ้า retry ล้มเหลว ให้สร้างใหม่
+              createUserProfile(u).catch((createError) => {
+                console.error("❌ Error creating profile:", createError)
+              })
+            }
+          }, 1000) // รอ 1 วินาทีเพื่อให้ Firestore sync
         } else {
           // ถ้าได้ profile แล้ว ให้อัปเดต state
+          console.log("✅ Profile loaded successfully, credits:", profile.credits)
           setCredits(profile.credits || 100)
           if (profile.columnConfig?.length) {
             setColumnConfig(profile.columnConfig)
           }
-          console.log("✅ Profile loaded successfully")
         }
       } catch (error) {
         console.error("❌ Error loading profile:", error)
@@ -157,47 +183,20 @@ export default function App() {
     return <div style={{ padding: 40 }}>Loading...</div>
   }
 
-  // 🔑 ยังไม่ login → หน้า Login
+  // 🔑 ยังไม่ login → หน้า Login V2
   if (!user) {
-    return <Login />
+    return <LoginV2 />
   }
 
-  // 📄 Page router
+  // 📄 Page router - V2 ONLY
   let content = null
 
-  if (page === "scan") {
+  // Default to Document Template Settings
+  if (page === "template-settings" || page === "home" || !page) {
     content = (
-      <Scan
+      <DocumentTemplateSettings
         credits={credits}
-        files={scanFiles}
-        setFiles={setScanFiles}
-        onNext={() => setPage("export")}
-      />
-    )
-  }
-
-  if (page === "excel") {
-    content = (
-      <ExcelMode
-        columnConfig={columnConfig}
-        setColumnConfig={setColumnConfig}
-      />
-    )
-  }
-
-  if (page === "export") {
-    content = (
-      <Export
-        scanFiles={scanFiles}
-        credits={credits}
-        columnConfig={columnConfig}
-        onConsume={(used) =>
-          setCredits((c) => c - used)
-        }
-        onDone={() => {
-          setScanFiles([])
-          setPage("scan")
-        }}
+        onConsume={(used) => setCredits((c) => c - used)}
       />
     )
   }
@@ -205,14 +204,27 @@ export default function App() {
   if (page === "settings") {
     content = (
       <Settings
-        onDone={() => setPage("scan")}
+        onDone={() => setPage("template-settings")}
       />
     )
   }
 
-  // ✅ Login แล้ว → เข้า Layout
+  if (page === "scan") {
+    content = (
+      <Scan
+        credits={credits}
+        files={scanFiles}
+        setFiles={setScanFiles}
+        onNext={() => setPage("template-settings")}
+        columnConfig={columnConfig}
+        onConsume={(used) => setCredits((c) => c - used)}
+      />
+    )
+  }
+
+  // ✅ Login แล้ว → เข้า Layout V2
   return (
-    <AppLayout
+    <AppLayoutV2
       page={page}
       onNavigate={setPage}
       credits={credits}
@@ -222,6 +234,6 @@ export default function App() {
       }}
     >
       {content}
-    </AppLayout>
+    </AppLayoutV2>
   )
 }

@@ -21,7 +21,7 @@ import {
 } from "@mui/material"
 import PlayArrowIcon from "@mui/icons-material/PlayArrow"
 import CloseIcon from "@mui/icons-material/Close"
-import { ocrFile } from "../services/ocr.service"
+import { ocrFileV2 } from "../services/ocr.service.v2"
 import { extractDataFromText } from "../services/textProcessor.service"
 import {
   createSeparateExcelFiles,
@@ -143,15 +143,21 @@ export default function Export({
               ocrText = ""
             }
           } else {
-            // Standard Mode: Use OCR v1 (returns text string)
-            const ocrResult = await Promise.race([
-              ocrFile(fileItem.file),
+            // Standard Mode: Use OCR v2 (returns OCRResult)
+            const ocrResultV2 = await Promise.race([
+              ocrFileV2(fileItem.file, undefined, true), // scanMode = true
               new Promise((_, reject) => 
                 setTimeout(() => reject(new Error("OCR timeout: เกิน 5 นาที")), 5 * 60 * 1000)
               )
             ])
-            // ตรวจสอบว่า ocrResult เป็น string หรือไม่
-            ocrText = typeof ocrResult === "string" ? ocrResult : (ocrResult?.text || "")
+            // Extract text from OCRResult
+            if (ocrResultV2 && ocrResultV2.words) {
+              ocrText = ocrResultV2.words.map((w) => w.text).join(" ")
+              // Store OCR result for preview
+              setOcrResults((prev) => [...prev, ocrResultV2])
+            } else {
+              ocrText = ""
+            }
           }
           
           console.log(`✅ OCR completed for: ${fileItem.originalName}`)

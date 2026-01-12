@@ -120,6 +120,17 @@ export default function LoginV2() {
     }
   }, [])
 
+  // Debug: ตรวจสอบว่า header bar render หรือไม่
+  useEffect(() => {
+    console.log("🔍 LoginV2 component mounted")
+    const header = document.querySelector('header')
+    if (header) {
+      console.log("✅ Header bar found:", header)
+    } else {
+      console.warn("⚠️ Header bar not found")
+    }
+  }, [])
+
   // ===== LOGIN =====
   const handleLogin = async () => {
     resetMsg()
@@ -296,22 +307,147 @@ export default function LoginV2() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+        background: "linear-gradient(135deg, #2d2d2d 0%, #3d3d3d 50%, #2f2f2f 100%)",
+        position: "relative",
+        overflow: "visible",
         p: 3,
+        pt: { xs: 8, sm: 10, md: 14 },
       }}
     >
-      <Container maxWidth="sm">
+      {/* Header bar - ภาษาไทยแบบหรู */}
+      <Box
+        component="header"
+        sx={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          width: "100%",
+          minHeight: { xs: 60, sm: 70, md: 80 },
+          background: "linear-gradient(135deg, #d3d3d3 0%, #c0c0c0 20%, #4d4d4d 50%, #3d3d3d 100%)",
+          backdropFilter: "blur(10px)",
+          borderBottom: "1px solid rgba(255, 255, 255, 0.3)",
+          borderBottomLeftRadius: { xs: 0, sm: 16, md: 20 },
+          borderBottomRightRadius: { xs: 0, sm: 16, md: 20 },
+          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+          zIndex: 9999,
+          py: { xs: 1, sm: 1.5, md: 2 },
+          px: { xs: 2, sm: 3, md: 4 },
+          display: "flex",
+          alignItems: "center",
+          visibility: "visible",
+          opacity: 1,
+        }}
+      >
+        <Box
+          sx={{
+            width: "100%",
+            maxWidth: "1200px",
+            margin: "0 auto",
+            px: { xs: 0.5, sm: 1, md: 2 },
+            pl: { xs: 1, sm: 1.5, md: 2 },
+          }}
+        >
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              width: "100%",
+            }}
+          >
+            {/* Logo */}
+            <Box
+              component="img"
+              src="/Logo.png"
+              alt="GOLDEN SOFT Logo"
+              onError={(e) => {
+                console.error("❌ Logo failed to load:", e.target.src)
+                // ลอง path อื่น
+                if (e.target.src.includes("Logo.png")) {
+                  e.target.src = "/logo.png"
+                } else if (e.target.src.includes("logo.png")) {
+                  e.target.src = "/Logo.PNG"
+                }
+              }}
+              onLoad={(e) => {
+                console.log("✅ Logo loaded successfully")
+                console.log("Logo dimensions:", e.target.naturalWidth, "x", e.target.naturalHeight)
+              }}
+              sx={{
+                height: { xs: 65, sm: 85, md: 110 },
+                width: "auto",
+                maxWidth: { xs: 200, sm: 300, md: 380 },
+                objectFit: "contain",
+                flexShrink: 0,
+                display: "block",
+                backgroundColor: "transparent",
+                visibility: "visible",
+                opacity: 1,
+                margin: 0,
+                marginTop: 0,
+                marginBottom: 0,
+                marginLeft: { xs: -0.5, sm: -0.75, md: -1 },
+                padding: 0,
+                paddingTop: 0,
+                paddingBottom: 0,
+                paddingLeft: 0,
+                paddingRight: 0,
+              }}
+            />
+            
+            {/* Text Content */}
+            <Box sx={{ flex: 1, minWidth: 0, marginTop: { xs: -1, sm: -1.25, md: -1.5 } }}>
+              <Typography
+                sx={{
+                  fontSize: { xs: "22px", sm: "28px", md: "36px" },
+                  fontWeight: 800,
+                  color: "#FFD700",
+                  lineHeight: 1.2,
+                  mb: { xs: 0.25, sm: 0.5 },
+                  letterSpacing: "0.03em",
+                  textShadow: "0 2px 10px rgba(0,0,0,0.5), 0 0 20px rgba(255, 215, 0, 0.3)",
+                }}
+              >
+                ระบบ OCR อัจฉริยะ
+              </Typography>
+              <Typography
+                sx={{
+                  fontSize: { xs: "10px", sm: "12px", md: "14px" },
+                  fontWeight: 500,
+                  color: "rgba(255, 215, 0, 0.9)",
+                  lineHeight: 1.4,
+                  letterSpacing: "0.02em",
+                  textShadow: "0 1px 5px rgba(0,0,0,0.5), 0 0 10px rgba(255, 215, 0, 0.2)",
+                }}
+              >
+                แปลงเอกสารเป็นข้อมูลดิจิทัล ด้วยเทคโนโลยี AI ที่ทันสมัย
+              </Typography>
+            </Box>
+          </Box>
+        </Box>
+      </Box>
+
+      <Container 
+        maxWidth="sm"
+        sx={{ position: "relative", zIndex: 2 }}
+      >
         <Card
           sx={{
             boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
             borderRadius: 3,
+            background: "linear-gradient(135deg, #3d3d3d 0%, #4d4d4d 50%, #c0c0c0 80%, #d3d3d3 100%)",
+            backdropFilter: "blur(10px)",
+            position: "relative",
+            zIndex: 2,
+            border: "1px solid rgba(255, 215, 0, 0.2)",
           }}
         >
           <CardContent sx={{ p: 4 }}>
-            <Typography variant="h4" fontWeight={700} sx={{ color: "#1e293b", mb: 1 }}>
-              OCR System v2
+            <Typography variant="h4" fontWeight={700} sx={{ color: "#FFD700", mb: 2.5, mt: -1, textShadow: "0 2px 4px rgba(255, 255, 255, 0.5), 0 1px 2px rgba(255, 255, 255, 0.3)" }}>
+              ระบบ OCR อัจฉริยะ
             </Typography>
-            <Typography variant="body2" sx={{ color: "#64748b", mb: 3 }}>
+            <Typography variant="body2" sx={{ color: "rgba(255, 215, 0, 0.8)", mb: 3, textShadow: "0 1px 3px rgba(255, 255, 255, 0.5), 0 1px 1px rgba(255, 255, 255, 0.3)" }}>
               {mode === "login" && "เข้าสู่ระบบ"}
               {mode === "register" && "สมัครสมาชิก"}
               {mode === "forgot" && "ลืมรหัสผ่าน"}
@@ -329,6 +465,27 @@ export default function LoginV2() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   fullWidth
+                  sx={{
+                    "& .MuiOutlinedInput-root": {
+                      backgroundColor: "rgba(255, 255, 255, 0.1)",
+                      color: "#FFD700",
+                      "& fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.3)",
+                      },
+                      "&:hover fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.5)",
+                      },
+                      "&.Mui-focused fieldset": {
+                        borderColor: "#FFD700",
+                      },
+                    },
+                    "& .MuiInputLabel-root": {
+                      color: "rgba(255, 215, 0, 0.7)",
+                    },
+                    "& .MuiInputLabel-root.Mui-focused": {
+                      color: "#FFD700",
+                    },
+                  }}
                 />
                 <TextField
                   label="Password"
@@ -342,6 +499,27 @@ export default function LoginV2() {
                     }
                   }}
                   fullWidth
+                  sx={{
+                    "& .MuiOutlinedInput-root": {
+                      backgroundColor: "rgba(255, 255, 255, 0.1)",
+                      color: "#FFD700",
+                      "& fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.3)",
+                      },
+                      "&:hover fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.5)",
+                      },
+                      "&.Mui-focused fieldset": {
+                        borderColor: "#FFD700",
+                      },
+                    },
+                    "& .MuiInputLabel-root": {
+                      color: "rgba(255, 215, 0, 0.7)",
+                    },
+                    "& .MuiInputLabel-root.Mui-focused": {
+                      color: "#FFD700",
+                    },
+                  }}
                 />
                 <Button 
                   variant="contained" 
@@ -351,10 +529,14 @@ export default function LoginV2() {
                   size="large"
                   sx={{
                     py: 1.5,
-                    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                    background: "linear-gradient(135deg, #FFD700 0%, #FFA500 50%, #DAA520 100%)",
                     textTransform: "none",
+                    boxShadow: "0 4px 15px rgba(255, 215, 0, 0.4)",
+                    color: "#1a1a1a",
+                    fontWeight: 700,
                     "&:hover": {
-                      background: "linear-gradient(135deg, #5568d3 0%, #6a3f8f 100%)",
+                      background: "linear-gradient(135deg, #FFC700 0%, #FF9500 50%, #C89520 100%)",
+                      boxShadow: "0 6px 20px rgba(255, 215, 0, 0.5)",
                     },
                   }}
                   startIcon={loading && <CircularProgress size={16} color="inherit" />}
@@ -390,14 +572,24 @@ export default function LoginV2() {
                   <Link 
                     component="button" 
                     onClick={() => handleModeChange("register")}
-                    sx={{ color: "#667eea", textDecoration: "none", cursor: "pointer" }}
+                    sx={{ color: "#FFD700", textDecoration: "none", cursor: "pointer", fontWeight: 500, "&:hover": { color: "#FFC700" } }}
                   >
                     สมัครสมาชิก
                   </Link>
                   <Link 
                     component="button" 
                     onClick={() => handleModeChange("forgot")}
-                    sx={{ color: "#667eea", textDecoration: "none", cursor: "pointer" }}
+                    sx={{ 
+                      color: "#FFD700", 
+                      textDecoration: "none", 
+                      cursor: "pointer", 
+                      fontWeight: 500,
+                      textShadow: "0 2px 4px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3)",
+                      "&:hover": { 
+                        color: "#FFC700",
+                        textShadow: "0 2px 6px rgba(0, 0, 0, 0.6), 0 1px 3px rgba(0, 0, 0, 0.4)",
+                      } 
+                    }}
                   >
                     ลืมรหัสผ่าน
                   </Link>
@@ -419,6 +611,27 @@ export default function LoginV2() {
                     }
                   }}
                   fullWidth
+                  sx={{
+                    "& .MuiOutlinedInput-root": {
+                      backgroundColor: "rgba(255, 255, 255, 0.1)",
+                      color: "#FFD700",
+                      "& fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.3)",
+                      },
+                      "&:hover fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.5)",
+                      },
+                      "&.Mui-focused fieldset": {
+                        borderColor: "#FFD700",
+                      },
+                    },
+                    "& .MuiInputLabel-root": {
+                      color: "rgba(255, 215, 0, 0.7)",
+                    },
+                    "& .MuiInputLabel-root.Mui-focused": {
+                      color: "#FFD700",
+                    },
+                  }}
                 />
                 <TextField
                   label="Password"
@@ -432,6 +645,27 @@ export default function LoginV2() {
                     }
                   }}
                   fullWidth
+                  sx={{
+                    "& .MuiOutlinedInput-root": {
+                      backgroundColor: "rgba(255, 255, 255, 0.1)",
+                      color: "#FFD700",
+                      "& fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.3)",
+                      },
+                      "&:hover fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.5)",
+                      },
+                      "&.Mui-focused fieldset": {
+                        borderColor: "#FFD700",
+                      },
+                    },
+                    "& .MuiInputLabel-root": {
+                      color: "rgba(255, 215, 0, 0.7)",
+                    },
+                    "& .MuiInputLabel-root.Mui-focused": {
+                      color: "#FFD700",
+                    },
+                  }}
                 />
                 <TextField
                   label="ยืนยัน Password"
@@ -445,6 +679,27 @@ export default function LoginV2() {
                     }
                   }}
                   fullWidth
+                  sx={{
+                    "& .MuiOutlinedInput-root": {
+                      backgroundColor: "rgba(255, 255, 255, 0.1)",
+                      color: "#FFD700",
+                      "& fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.3)",
+                      },
+                      "&:hover fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.5)",
+                      },
+                      "&.Mui-focused fieldset": {
+                        borderColor: "#FFD700",
+                      },
+                    },
+                    "& .MuiInputLabel-root": {
+                      color: "rgba(255, 215, 0, 0.7)",
+                    },
+                    "& .MuiInputLabel-root.Mui-focused": {
+                      color: "#FFD700",
+                    },
+                  }}
                 />
                 <Button 
                   variant="contained" 
@@ -454,10 +709,14 @@ export default function LoginV2() {
                   size="large"
                   sx={{
                     py: 1.5,
-                    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                    background: "linear-gradient(135deg, #FFD700 0%, #FFA500 50%, #DAA520 100%)",
                     textTransform: "none",
+                    boxShadow: "0 4px 15px rgba(255, 215, 0, 0.4)",
+                    color: "#1a1a1a",
+                    fontWeight: 700,
                     "&:hover": {
-                      background: "linear-gradient(135deg, #5568d3 0%, #6a3f8f 100%)",
+                      background: "linear-gradient(135deg, #FFC700 0%, #FF9500 50%, #C89520 100%)",
+                      boxShadow: "0 6px 20px rgba(255, 215, 0, 0.5)",
                     },
                   }}
                   startIcon={loading && <CircularProgress size={16} color="inherit" />}
@@ -468,7 +727,7 @@ export default function LoginV2() {
                 <Link 
                   component="button" 
                   onClick={() => handleModeChange("login")}
-                  sx={{ color: "#667eea", textDecoration: "none", cursor: "pointer", textAlign: "center" }}
+                  sx={{ color: "#FFD700", textDecoration: "none", cursor: "pointer", textAlign: "center", fontWeight: 500, "&:hover": { color: "#FFC700" } }}
                 >
                   กลับไปหน้า Login
                 </Link>
@@ -489,6 +748,27 @@ export default function LoginV2() {
                     }
                   }}
                   fullWidth
+                  sx={{
+                    "& .MuiOutlinedInput-root": {
+                      backgroundColor: "rgba(255, 255, 255, 0.1)",
+                      color: "#FFD700",
+                      "& fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.3)",
+                      },
+                      "&:hover fieldset": {
+                        borderColor: "rgba(255, 215, 0, 0.5)",
+                      },
+                      "&.Mui-focused fieldset": {
+                        borderColor: "#FFD700",
+                      },
+                    },
+                    "& .MuiInputLabel-root": {
+                      color: "rgba(255, 215, 0, 0.7)",
+                    },
+                    "& .MuiInputLabel-root.Mui-focused": {
+                      color: "#FFD700",
+                    },
+                  }}
                 />
                 <Button 
                   variant="contained" 
@@ -498,10 +778,14 @@ export default function LoginV2() {
                   size="large"
                   sx={{
                     py: 1.5,
-                    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                    background: "linear-gradient(135deg, #FFD700 0%, #FFA500 50%, #DAA520 100%)",
                     textTransform: "none",
+                    boxShadow: "0 4px 15px rgba(255, 215, 0, 0.4)",
+                    color: "#1a1a1a",
+                    fontWeight: 700,
                     "&:hover": {
-                      background: "linear-gradient(135deg, #5568d3 0%, #6a3f8f 100%)",
+                      background: "linear-gradient(135deg, #FFC700 0%, #FF9500 50%, #C89520 100%)",
+                      boxShadow: "0 6px 20px rgba(255, 215, 0, 0.5)",
                     },
                   }}
                   startIcon={loading && <CircularProgress size={16} color="inherit" />}
@@ -512,7 +796,7 @@ export default function LoginV2() {
                 <Link 
                   component="button" 
                   onClick={() => handleModeChange("login")}
-                  sx={{ color: "#667eea", textDecoration: "none", cursor: "pointer", textAlign: "center" }}
+                  sx={{ color: "#FFD700", textDecoration: "none", cursor: "pointer", textAlign: "center", fontWeight: 500, "&:hover": { color: "#FFC700" } }}
                 >
                   กลับไปหน้า Login
                 </Link>

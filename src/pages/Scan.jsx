@@ -29,7 +29,7 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow"
 import { getPdfPageCount, isPdfFile } from "../services/pdf.service"
 import { auth } from "../firebase"
 import { updateUserCredits, getUserProfile } from "../services/user.service"
-import { ocrFile } from "../services/ocr.service"
+// Removed: import { ocrFile } from "../services/ocr.service" - not used, using runOCR (v2) instead
 import { extractDataFromText } from "../services/textProcessor.service"
 import {
   createSeparateExcelFiles,

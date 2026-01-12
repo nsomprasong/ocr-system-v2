@@ -964,75 +964,23 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
                       {/* Page Range Selection (only for single PDF file) */}
                       {files.length === 1 && files.some(f => isPdfFile(f.file)) && (
                         <Box>
-                          <Typography variant="caption" sx={{ color: "#64748b", mb: 1, display: "block" }}>
-                            เลือกวิธีระบุช่วงหน้า:
-                          </Typography>
-                          <Stack spacing={2}>
-                            {/* Option 1: Start/End Page (Simple range) */}
-                            <Box>
-                              <Typography variant="caption" sx={{ color: "#475569", mb: 0.5, display: "block", fontWeight: 500 }}>
-                                วิธีที่ 1: ระบุช่วงหน้า (แนะนำ)
-                              </Typography>
-                              <Stack direction="row" spacing={1}>
-                                <TextField
-                                  size="small"
-                                  label="ตั้งแต่หน้า"
-                                  placeholder="เช่น: 20"
-                                  value={startPage}
-                                  onChange={(e) => {
-                                    setStartPage(e.target.value)
-                                    setPageRange("") // Clear pageRange when using startPage/endPage
-                                  }}
-                                  type="number"
-                                  inputProps={{ min: 1 }}
-                                  sx={{
-                                    bgcolor: "#ffffff",
-                                    flex: 1,
-                                  }}
-                                />
-                                <TextField
-                                  size="small"
-                                  label="ถึงหน้า"
-                                  placeholder="เช่น: 30"
-                                  value={endPage}
-                                  onChange={(e) => {
-                                    setEndPage(e.target.value)
-                                    setPageRange("") // Clear pageRange when using startPage/endPage
-                                  }}
-                                  type="number"
-                                  inputProps={{ min: 1 }}
-                                  sx={{
-                                    bgcolor: "#ffffff",
-                                    flex: 1,
-                                  }}
-                                />
-                              </Stack>
-                            </Box>
-                            
-                            {/* Option 2: Page Range String (Advanced) */}
-                            <Box>
-                              <Typography variant="caption" sx={{ color: "#475569", mb: 0.5, display: "block", fontWeight: 500 }}>
-                                วิธีที่ 2: ระบุหน้าแบบละเอียด
-                              </Typography>
-                              <TextField
-                                fullWidth
-                                size="small"
-                                label="ช่วงหน้าที่จะสแกน"
-                                placeholder="เช่น: 1,2-6,20-22"
-                                value={pageRange}
-                                onChange={(e) => {
-                                  setPageRange(e.target.value)
-                                  setStartPage("") // Clear startPage/endPage when using pageRange
-                                  setEndPage("")
-                                }}
-                                helperText="ระบุหน้าเฉพาะ: 1,3,5 หรือช่วง: 1-10 หรือรวมกัน: 1,2-6,20-22"
-                                sx={{
-                                  bgcolor: "#ffffff",
-                                }}
-                              />
-                            </Box>
-                          </Stack>
-                          {(startPage || endPage || pageRange) && (
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="ระบุหน้าเพื่อ scan"
+                            placeholder="เช่น: 1,2-6,20-22"
+                            value={pageRange}
+                            onChange={(e) => {
+                              setPageRange(e.target.value)
+                              setStartPage("") // Clear startPage/endPage when using pageRange
+                              setEndPage("")
+                            }}
+                            helperText="ระบุหน้าเฉพาะ: 1,3,5 หรือช่วง: 1-10 หรือรวมกัน: 1,2-6,20-22"
+                            sx={{
+                              bgcolor: "#ffffff",
+                            }}
+                          />
+                          {pageRange && (
                             <Typography variant="caption" sx={{ color: "#10b981", mt: 1, display: "block" }}>
                               ✓ จะสแกนเฉพาะหน้าที่ระบุ (ไม่ระบุ = ทั้งหมด)
                             </Typography>

@@ -75,6 +75,7 @@ export default function Sidebar({ page, onNavigate, onLogout }) {
   }, [user])
 
   const menu = [
+    { key: "home", label: "หน้าแรก", icon: <HomeIcon /> },
     { key: "scan", label: "สแกนเอกสาร", icon: <ScannerIcon /> },
     { key: "template-settings", label: "ตั้งค่าเทมเพลต", icon: <DescriptionIcon /> },
     { key: "settings", label: "ตั้งค่า", icon: <SettingsIcon /> },
@@ -97,12 +98,22 @@ export default function Sidebar({ page, onNavigate, onLogout }) {
       }}
     >
       {/* Header */}
-      <Box sx={{ p: 3, borderBottom: "1px solid #334155" }}>
-        <Typography variant="h6" fontWeight={700} sx={{ color: "#ffffff", mb: 1 }}>
-          OCR System v2
-        </Typography>
+      <Box sx={{ p: 1, pt: 0.5, borderBottom: "1px solid #334155", display: "flex", flexDirection: "column" }}>
+        <Box
+          component="img"
+          src="/imageOcrSystem.png"
+          alt="OCR System v2"
+          sx={{
+            width: "100%",
+            maxWidth: "200px",
+            height: "auto",
+            mb: 0, // No margin bottom
+            objectFit: "contain",
+            alignSelf: "flex-start", // Align to top
+          }}
+        />
         {user && (
-          <Box>
+          <Box sx={{ mt: -3 }}>
             <Typography
               fontSize={12}
               sx={{ opacity: 0.8, wordBreak: "break-all", color: "#94a3b8" }}

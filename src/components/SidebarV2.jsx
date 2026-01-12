@@ -41,12 +41,22 @@ export default function SidebarV2({ page, onNavigate, credits, onLogout }) {
       }}
     >
       {/* Header */}
-      <Box sx={{ p: 3, borderBottom: "1px solid #334155" }}>
-        <Typography variant="h6" fontWeight={700} sx={{ color: "#ffffff", mb: 1 }}>
-          OCR System v2
-        </Typography>
+      <Box sx={{ p: 1, pt: .5, borderBottom: "1px solid #334155", display: "flex", flexDirection: "column" }}>
+        <Box
+          component="img"
+          src="/imageOcrSystem.png"
+          alt="OCR System v2"
+          sx={{
+            width: "130%",
+            maxWidth: "200px",
+            height: "auto",
+            mb: 0, // No margin bottom
+            objectFit: "contain",
+            alignSelf: "flex-start", // Align to top
+          }}
+        />
         {user && (
-          <Box>
+          <Box sx={{ mt: 0.25 }}>
             <Typography
               fontSize={12}
               sx={{ opacity: 0.8, wordBreak: "break-all", color: "#94a3b8" }}

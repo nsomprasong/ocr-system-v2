@@ -201,12 +201,55 @@ export async function runOCR(
   let normalizedImageUrl: string | undefined
   if (ocrResult.normalizedImageBase64 && !scanMode) {
     try {
-      console.log("📸 [runOCR] Creating blob URL from normalized image...")
-      const normalizedImageBlob = await fetch(
-        `data:image/png;base64,${ocrResult.normalizedImageBase64}`
-      ).then((r) => r.blob())
-      normalizedImageUrl = URL.createObjectURL(normalizedImageBlob)
-      console.log("✅ [runOCR] Normalized image URL created")
+      // Validate that normalizedImageBase64 is actually base64 image data
+      const base64Data = ocrResult.normalizedImageBase64
+      if (base64Data && base64Data.length > 100 && !base64Data.includes("token") && !base64Data.includes("error")) {
+        console.log("📸 [runOCR] Creating blob URL from normalized image...")
+        console.log(`📸 [runOCR] Base64 length: ${base64Data.length} bytes (${(base64Data.length / 1024).toFixed(2)} KB)`)
+        console.log(`📸 [runOCR] Base64 preview: ${base64Data.substring(0, 50)}...`)
+        
+        // Create image element to check dimensions
+        const img = new Image()
+        const imagePromise = new Promise<{width: number, height: number}>((resolve, reject) => {
+          img.onload = () => {
+            resolve({ width: img.naturalWidth, height: img.naturalHeight })
+          }
+          img.onerror = reject
+          img.src = `data:image/png;base64,${base64Data}`
+        })
+        
+        const normalizedImageBlob = await fetch(
+          `data:image/png;base64,${base64Data}`
+        ).then((r) => r.blob())
+        normalizedImageUrl = URL.createObjectURL(normalizedImageBlob)
+        
+        // Check image dimensions
+        try {
+          const dimensions = await imagePromise
+          console.log(`📐 [runOCR] Normalized image dimensions: ${dimensions.width}x${dimensions.height}`)
+          console.log(`📐 [runOCR] OCR page dimensions: ${ocrResult.page?.width || "N/A"}x${ocrResult.page?.height || "N/A"}`)
+          
+          if (ocrResult.page) {
+            const widthMatch = Math.abs(dimensions.width - ocrResult.page.width) < 1
+            const heightMatch = Math.abs(dimensions.height - ocrResult.page.height) < 1
+            if (widthMatch && heightMatch) {
+              console.log(`✅ [runOCR] Image dimensions match OCR dimensions perfectly`)
+            } else {
+              console.warn(`⚠️ [runOCR] Image dimensions mismatch!`)
+              console.warn(`   Image: ${dimensions.width}x${dimensions.height}`)
+              console.warn(`   OCR: ${ocrResult.page.width}x${ocrResult.page.height}`)
+              console.warn(`   Difference: ${Math.abs(dimensions.width - ocrResult.page.width)}x${Math.abs(dimensions.height - ocrResult.page.height)}`)
+            }
+          }
+        } catch (dimError) {
+          console.warn(`⚠️ [runOCR] Could not check image dimensions:`, dimError)
+        }
+        
+        console.log(`✅ [runOCR] Normalized image URL created: ${normalizedImageUrl.substring(0, 50)}...`)
+      } else {
+        console.warn("⚠️ [runOCR] normalizedImageBase64 appears to be invalid (too short or contains token/error)")
+        console.warn(`⚠️ [runOCR] Base64 preview: ${base64Data ? base64Data.substring(0, 100) : "null"}`)
+      }
     } catch (err) {
       console.error("❌ [runOCR] Failed to create normalized image URL:", err)
     }

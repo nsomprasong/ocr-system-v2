@@ -234,8 +234,11 @@ export function mergeConnectedWords(words) {
         }
         // Save current group
         // IMPORTANT: Join words and preserve all spaces from word.text (don't remove spaces)
+        // Replace \n with space to prevent unwanted line breaks (newlines in OCR text are not actual line breaks)
         // If word.text contains space, keep it; otherwise join without adding space
-        const joinedText = currentGroup.words.map((w) => w.text || "").join("")
+        const joinedText = currentGroup.words
+          .map((w) => (w.text || "").replace(/\n/g, " ")) // Replace \n with space
+          .join("")
         
         mergedWords.push({
           text: joinedText,
@@ -259,8 +262,11 @@ export function mergeConnectedWords(words) {
   // Don't forget the last group
   if (currentGroup) {
     // IMPORTANT: Join words and preserve all spaces from word.text (don't remove spaces)
+    // Replace \n with space to prevent unwanted line breaks (newlines in OCR text are not actual line breaks)
     // If word.text contains space, keep it; otherwise join without adding space
-    const joinedText = currentGroup.words.map((w) => w.text || "").join("")
+    const joinedText = currentGroup.words
+      .map((w) => (w.text || "").replace(/\n/g, " ")) // Replace \n with space
+      .join("")
     
     mergedWords.push({
       text: joinedText,

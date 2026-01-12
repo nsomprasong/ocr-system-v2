@@ -1,4 +1,4 @@
- import { useState, useEffect, useRef, useCallback } from "react"
+ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react"
 import {
   Box,
   Typography,
@@ -37,6 +37,7 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle"
 import CloseIcon from "@mui/icons-material/Close"
 import DescriptionIcon from "@mui/icons-material/Description"
 import AddIcon from "@mui/icons-material/Add"
+import RemoveIcon from "@mui/icons-material/Remove"
 import { auth } from "../firebase"
 import { runOCR } from "../utils/runOCR"
 import { saveTemplate } from "../../template/saveTemplate"
@@ -115,8 +116,12 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
 
   // Display size for scaling
   const [displaySize, setDisplaySize] = useState(null)
+  const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 }) // Offset for centered image
+  const [zoomLevel, setZoomLevel] = useState(1.0) // Initial zoom at 100%
   const containerRef = useRef(null)
   const imageRef = useRef(null)
+  const step2Ref = useRef(null) // Ref for Step 2 scrolling
+  const cardRef = useRef(null) // Ref for Card element to get card width
 
   const user = auth.currentUser
 
@@ -250,9 +255,6 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
                                normalizedRotation === 180 ? 180 :
                                normalizedRotation === 270 ? 270 : 0
       
-      console.log(`🔄 [Rotate] Current: ${currentRotation}° → New: ${standardRotation}° (standardized)`)
-      console.log(`📐 [Rotate] Image will be displayed with CSS transform: rotate(${standardRotation}deg)`)
-      console.log(`📐 [Rotate] Image state: ${standardRotation === 0 ? "Upright" : standardRotation === 90 ? "Tilted Right (90°)" : standardRotation === 180 ? "Upside Down" : "Tilted Left (270°)"}`)
       
       // Return the same image URL (no rotation in blob) and the new rotation value
       // The image will be displayed with CSS transform to match the rotation value
@@ -277,7 +279,6 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
       setLines([])
       setGroups([])
       
-      console.log(`🔄 Rotated image to ${rotation}° - OCR result cleared`)
     } catch (error) {
       console.error("❌ Failed to rotate image:", error)
       setError(`Failed to rotate image: ${error.message}`)
@@ -403,95 +404,296 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
     return extractPageFromPdf(pdfFile, 1)
   }
 
-  // Get image display size
+  // Get image display size from OCR result or preview image
+  // CRITICAL: Calculate displaySize immediately from OCR dimensions to prevent large image display
   useEffect(() => {
-    const image = imageRef.current
-    if (!image) return
+    // If we have OCR result, calculate displaySize immediately (don't wait for image load)
+    // NOTE: zoomLevel changes are handled by useLayoutEffect below to prevent race conditions
+    if (ocrResult && ocrResult.page) {
+      const ocrWidth = ocrResult.page.width
+      const ocrHeight = ocrResult.page.height
+      
+      if (ocrWidth > 0 && ocrHeight > 0) {
+        // Calculate displaySize to fit card (both width and height, not exceeding)
+        // This only runs when ocrResult or imageUrl changes, NOT when zoomLevel changes
+        const updateSize = () => {
+          const image = imageRef.current
+          const container = containerRef.current
+          const card = cardRef.current
+          if (!image || !container || !card) return
 
-    const updateSize = () => {
-      if (image.complete) {
-        setDisplaySize({
-          width: image.clientWidth,
-          height: image.clientHeight,
-        })
+          const naturalWidth = image.naturalWidth || 0
+          const naturalHeight = image.naturalHeight || 0
+          
+          if (naturalWidth > 0 && naturalHeight > 0) {
+            // Get available space from card and container
+            const cardWidth = card.clientWidth
+            const containerHeight = container.clientHeight
+            
+            // Calculate available space (subtract padding)
+            const padding = 32 // Approximate padding from Stack (p: 2 = 16px * 2)
+            const availableWidth = cardWidth - padding
+            const availableHeight = containerHeight - 20 // Leave some margin
+            
+            // Calculate scale to fit both width and height
+            const scaleForWidth = availableWidth / naturalWidth
+            const scaleForHeight = availableHeight / naturalHeight
+            
+            // Use the smaller scale to ensure image fits both width and height (no overflow)
+            const baseScale = Math.min(scaleForWidth, scaleForHeight)
+            
+            // NOTE: Don't use zoomLevel here - useLayoutEffect below will handle it
+            // This useEffect only triggers useLayoutEffect to recalculate when ocrResult/imageUrl changes
+            // The useLayoutEffect will apply zoomLevel and update both displaySize and transform
+            
+            // DON'T calculate displaySize here - let useLayoutEffect handle it
+            // This prevents using stale zoomLevel value from closure
+            // The useLayoutEffect will calculate displaySize and apply transform with current zoomLevel
+          } else {
+            // Fallback: use OCR dimensions with same scale calculation
+            const cardWidth = cardRef.current?.clientWidth || 0
+            const containerHeight = containerRef.current?.clientHeight || 0
+            
+            if (cardWidth > 0 && containerHeight > 0) {
+              const padding = 32
+              const availableWidth = cardWidth - padding
+              const availableHeight = containerHeight - 20
+              
+              const scaleForWidth = availableWidth / ocrWidth
+              const scaleForHeight = availableHeight / ocrHeight
+              const baseScale = Math.min(scaleForWidth, scaleForHeight)
+              
+              // NOTE: Don't use zoomLevel here - useLayoutEffect below will handle it
+              // This useEffect only triggers useLayoutEffect to recalculate when ocrResult/imageUrl changes
+              // The useLayoutEffect will apply zoomLevel and update both displaySize and transform
+              
+              // DON'T calculate displaySize here - let useLayoutEffect handle it
+              // This prevents using stale zoomLevel value from closure
+            }
+          }
+        }
+
+        // Wait for image to load
+        const image = imageRef.current
+        if (image) {
+          if (image.complete) {
+            updateSize()
+          } else {
+            image.addEventListener("load", updateSize)
+          }
+        }
+
+        // Update on resize (but not on zoomLevel change - that's handled by useLayoutEffect)
+        const handleResize = () => {
+          setTimeout(updateSize, 100)
+        }
+        
+        window.addEventListener("resize", handleResize)
+        return () => {
+          if (image) {
+            image.removeEventListener("load", updateSize)
+          }
+          window.removeEventListener("resize", handleResize)
+        }
       }
     }
+  }, [ocrResult, imageUrl, imageRotation]) // Recalculate when OCR result or image changes (NOT zoomLevel - handled by useLayoutEffect below)
 
-    if (image.complete) {
-      updateSize()
-    } else {
-      image.addEventListener("load", updateSize)
+  // Update image transform when zoomLevel, ocrResult, or imageUrl changes
+  // Use useLayoutEffect to update synchronously before browser paint
+  // This ensures image, tokens, and groups scale together perfectly
+  // CRITICAL: This is the ONLY place that handles zoomLevel, ocrResult, and imageUrl changes to prevent race conditions
+  useLayoutEffect(() => {
+    const image = imageRef.current
+    if (!image || !ocrResult?.page) return
+
+    const naturalWidth = image.naturalWidth || 0
+    const naturalHeight = image.naturalHeight || 0
+    
+    // Wait for image to load before calculating
+    if (naturalWidth > 0 && naturalHeight > 0 && image.complete) {
+      const container = containerRef.current
+      const card = cardRef.current
+      
+      if (!container || !card) return
+      
+      // CRITICAL: Re-read layout values every time to ensure we have the latest measurements
+      // This is especially important when zoomLevel changes (especially at 100%)
+      // because the layout may have shifted from previous zoom levels
+      // Use getBoundingClientRect() for more accurate measurements
+      const cardRect = card.getBoundingClientRect()
+      const containerRect = container.getBoundingClientRect()
+      const cardWidth = cardRect.width
+      const containerHeight = containerRect.height
+      const padding = 32
+      const availableWidth = Math.max(0, cardWidth - padding)
+      const availableHeight = Math.max(0, containerHeight - 20)
+      
+      // Ensure we have valid dimensions
+      if (availableWidth <= 0 || availableHeight <= 0) return
+      
+      // Calculate base scale to fit card
+      const scaleForWidth = availableWidth / naturalWidth
+      const scaleForHeight = availableHeight / naturalHeight
+      const baseScale = Math.min(scaleForWidth, scaleForHeight)
+      
+      // Apply zoomLevel to base scale
+      const finalScale = baseScale * zoomLevel
+      
+      // Calculate displayed size with zoom
+      const displayedWidth = naturalWidth * finalScale
+      const displayedHeight = naturalHeight * finalScale
+      
+      // Update displaySize immediately (synchronously)
+      setDisplaySize({
+        width: displayedWidth,
+        height: displayedHeight,
+      })
+      
+      // CRITICAL: Calculate scaleX and scaleY from displayedWidth/Height (same formula as getScaleFactor)
+      // This ensures the image uses the exact same scale as tokens and groups
+      // getScaleFactor() uses: scaleX = displaySize.width / naturalWidth
+      // We use: scaleX = displayedWidth / naturalWidth (which equals displaySize.width / naturalWidth)
+      const scaleX = naturalWidth > 0 ? displayedWidth / naturalWidth : 1
+      const scaleY = naturalHeight > 0 ? displayedHeight / naturalHeight : 1
+      
+      // Apply CSS transform scale using scaleX and scaleY (same as tokens/groups)
+      // CRITICAL: Use exact same scale calculation as getScaleFactor() to ensure perfect alignment
+      // This ensures image, tokens, and groups all use the same scale factor
+      if (ocrResult?.normalizedImageBase64) {
+        image.style.transform = `scale(${scaleX}, ${scaleY})`
+      } else {
+        image.style.transform = `scale(${scaleX}, ${scaleY}) rotate(${imageRotation}deg)`
+      }
+      image.style.transformOrigin = "top left" // Match tokens/groups positioning
+      
+      // Recalculate offset for centered image
+      // CRITICAL: Re-read container width using getBoundingClientRect() for accuracy
+      const containerRectForOffset = container.getBoundingClientRect()
+      const containerWidthForOffset = containerRectForOffset.width
+      const offsetXForOffset = (containerWidthForOffset - displayedWidth) / 2
+      setImageOffset({ x: Math.max(0, offsetXForOffset), y: 0 })
+    } else if (image && ocrResult?.page) {
+      // Image is not loaded yet, wait for it to load
+      const handleImageLoad = () => {
+        // Re-run the calculation when image loads
+        const currentImage = imageRef.current
+        if (currentImage && currentImage.complete) {
+          const currentNaturalWidth = currentImage.naturalWidth || 0
+          const currentNaturalHeight = currentImage.naturalHeight || 0
+          
+          if (currentNaturalWidth > 0 && currentNaturalHeight > 0) {
+            const container = containerRef.current
+            const card = cardRef.current
+            
+            if (container && card) {
+              const cardRect = card.getBoundingClientRect()
+              const containerRect = container.getBoundingClientRect()
+              const cardWidth = cardRect.width
+              const containerHeight = containerRect.height
+              const padding = 32
+              const availableWidth = Math.max(0, cardWidth - padding)
+              const availableHeight = Math.max(0, containerHeight - 20)
+              
+              if (availableWidth > 0 && availableHeight > 0) {
+                const scaleForWidth = availableWidth / currentNaturalWidth
+                const scaleForHeight = availableHeight / currentNaturalHeight
+                const baseScale = Math.min(scaleForWidth, scaleForHeight)
+                const finalScale = baseScale * zoomLevel
+                const displayedWidth = currentNaturalWidth * finalScale
+                const displayedHeight = currentNaturalHeight * finalScale
+                
+                setDisplaySize({
+                  width: displayedWidth,
+                  height: displayedHeight,
+                })
+                
+                const scaleX = currentNaturalWidth > 0 ? displayedWidth / currentNaturalWidth : 1
+                const scaleY = currentNaturalHeight > 0 ? displayedHeight / currentNaturalHeight : 1
+                
+                if (ocrResult?.normalizedImageBase64) {
+                  currentImage.style.transform = `scale(${scaleX}, ${scaleY})`
+                } else {
+                  currentImage.style.transform = `scale(${scaleX}, ${scaleY}) rotate(${imageRotation}deg)`
+                }
+                currentImage.style.transformOrigin = "top left"
+                
+                const containerRectForOffset = container.getBoundingClientRect()
+                const containerWidthForOffset = containerRectForOffset.width
+                const offsetXForOffset = (containerWidthForOffset - displayedWidth) / 2
+                setImageOffset({ x: Math.max(0, offsetXForOffset), y: 0 })
+              }
+            }
+          }
+        }
+      }
+      
+      image.addEventListener("load", handleImageLoad, { once: true })
+      
+      return () => {
+        image.removeEventListener("load", handleImageLoad)
+      }
     }
+  }, [zoomLevel, ocrResult, imageUrl, imageRotation]) // Update transform when zoomLevel, ocrResult, or imageUrl changes
 
-    const handleResize = () => updateSize()
-    window.addEventListener("resize", handleResize)
+  // Fallback: calculate size from preview image in step 1 (when no OCR result yet)
+  useEffect(() => {
+    if (!ocrResult) {
+      const image = imageRef.current
+      if (!image) return
 
-    return () => {
-      image.removeEventListener("load", updateSize)
-      window.removeEventListener("resize", handleResize)
+      const updateSize = () => {
+        if (image.complete) {
+          setDisplaySize({
+            width: image.clientWidth,
+            height: image.clientHeight,
+          })
+          setImageOffset({ x: 0, y: 0 })
+        }
+      }
+
+      if (image.complete) {
+        updateSize()
+      } else {
+        image.addEventListener("load", updateSize)
+      }
+
+      const handleResize = () => updateSize()
+      window.addEventListener("resize", handleResize)
+
+      return () => {
+        if (image) {
+          image.removeEventListener("load", updateSize)
+        }
+        window.removeEventListener("resize", handleResize)
+      }
     }
-  }, [imageUrl, ocrResult])
+  }, [ocrResult, imageUrl, imageRotation])
 
   // Merge words into lines when OCR result changes
   useEffect(() => {
     if (ocrResult) {
-      console.log(`📊 [Lines] OCR Result state:`, {
-        hasOcrResult: !!ocrResult,
-        hasWords: !!ocrResult.words,
-        wordsCount: ocrResult.words?.length || 0,
-        wordsPreview: ocrResult.words?.slice(0, 3) || [],
-      })
-      
       if (ocrResult.words && ocrResult.words.length > 0) {
         // Use only first page (if multi-page, take first page words)
         const firstPageWords = ocrResult.words
         
-        // Log sample words to verify OCR detection
-        console.log(`📊 [Words] OCR detected ${firstPageWords.length} words`)
-        if (firstPageWords.length > 0) {
-          console.log(`📝 [Words] Sample words (first 10):`, firstPageWords.slice(0, 10).map(w => ({
-            text: w.text,
-            pos: `(${w.x?.toFixed(0)}, ${w.y?.toFixed(0)})`,
-            size: `${w.w?.toFixed(0)}x${w.h?.toFixed(0)}`
-          })))
-        }
-        
         // Merge connected words into single words
-        console.log(`📊 [Words] Merging ${firstPageWords.length} words (connecting adjacent words)...`)
         const connectedWords = mergeConnectedWords(firstPageWords)
         setMergedWords(connectedWords)
-        console.log(`✅ [Words] Merged ${firstPageWords.length} words into ${connectedWords.length} connected words`)
-        
-        // Export test function to window for debugging
-        if (typeof window !== "undefined" && firstPageWords.length > 0) {
-          // Make testTokenMerge available in console
-          import("../utils/testTokenMerge").then(({ testTokenMerge }) => {
-            window.testTokenMerge = testTokenMerge;
-            console.log("🧪 [Test] testTokenMerge function is now available in console");
-            console.log("🧪 [Test] Usage: testTokenMerge([token1, token2, token3])");
-            console.log("🧪 [Test] Example: testTokenMerge(mergedWords.slice(0, 3))");
-          }).catch(err => {
-            console.warn("⚠️ [Test] Could not load testTokenMerge:", err);
-          });
-        }
         
         // Also merge into lines for compatibility
-        console.log(`📊 [Lines] Merging ${firstPageWords.length} words into lines...`)
         const mergedLines = mergeWordsIntoLines(firstPageWords)
         setLines(mergedLines)
-        console.log(`✅ [Lines] Merged ${firstPageWords.length} words into ${mergedLines.length} lines`)
         
         if (mergedLines.length === 0) {
-          console.warn(`⚠️ [Lines] No lines created from ${firstPageWords.length} words. Check mergeWordsIntoLines function.`)
-          console.warn(`⚠️ [Lines] First few words:`, firstPageWords.slice(0, 5))
+          console.warn(`⚠️ [Lines] No lines created from ${firstPageWords.length} words`)
         }
       } else {
-        console.warn(`⚠️ [Lines] OCR result has no words. Cannot create lines.`)
+        console.warn(`⚠️ [Lines] OCR result has no words`)
         setLines([])
         setMergedWords([])
       }
     } else {
-      console.log(`📊 [Lines] No OCR result yet. Lines will be empty.`)
       setLines([])
     }
   }, [ocrResult])
@@ -544,20 +746,9 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
     setError(null)
 
     try {
-      console.log("🔍 [V2] Running OCR v2 with Normalization Pipeline...")
-      console.log("📋 [V2] Pipeline: File → Normalize (PDF→Image, Detect Orientation, Rotate) → OCR")
-      
       // IMPORTANT: Send original file directly - normalization pipeline will handle everything
-      // No need to rotate manually - pipeline will detect and rotate automatically
       const fileToScan = imageFile
       const isOriginalPdf = imageFile.type === "application/pdf" || imageFile.name.toLowerCase().endsWith(".pdf")
-      
-      console.log(`📄 [V2] File: ${fileToScan.name}, Type: ${isOriginalPdf ? "PDF" : "Image"}`)
-      console.log(`🔄 [V2] Normalization pipeline will:`)
-      console.log(`   1. Convert PDF → Image (DPI 300) ${isOriginalPdf ? "✓" : "N/A"}`)
-      console.log(`   2. Detect orientation from text content`)
-      console.log(`   3. Rotate image until upright (0/90/180/270)`)
-      console.log(`   4. Run OCR on normalized image`)
       
       // Use ocrFileV2 which calls Firebase function with normalization pipeline
       // STANDARD: Send exact rotation value from imageRotation state (0, 90, 180, 270)
@@ -568,24 +759,14 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
       // Build options for page range (if specified)
       const ocrOptions = {};
       if (isOriginalPdf && previewPage) {
-        // If previewPage specified, use it for OCR
         const parsedPage = parseInt(previewPage, 10);
         if (!isNaN(parsedPage) && parsedPage >= 1) {
           ocrOptions.startPage = parsedPage;
           ocrOptions.endPage = parsedPage; // Single page only
-          console.log(`📄 [OCR] Preview page specified: ${previewPage}, parsed: ${parsedPage}`);
-          console.log(`📄 [OCR] Using page ${parsedPage} for OCR (startPage=${ocrOptions.startPage}, endPage=${ocrOptions.endPage})`);
         } else {
-          console.warn(`⚠️ [OCR] Invalid previewPage: ${previewPage}, parsed: ${parsedPage}`);
+          console.warn(`⚠️ [OCR] Invalid previewPage: ${previewPage}`);
         }
-      } else {
-        console.log(`📄 [OCR] No previewPage specified (previewPage="${previewPage}"), using default: first page only`);
       }
-      
-      console.log(`🔄 [OCR] Current imageRotation: ${imageRotation}°`)
-      console.log(`🔄 [OCR] Sending rotation to Firebase: ${rotationToSend !== undefined ? rotationToSend + "°" : "auto-detect"}`)
-      console.log(`📋 [OCR] Mode: TEMPLATE (${ocrOptions.startPage ? `page ${ocrOptions.startPage}` : "first page only"}, with normalized image)`)
-      console.log(`📋 [OCR] Options being sent:`, ocrOptions);
       
       // Use unified runOCR function
       const { ocrResult, normalizedImageUrl } = await runOCR(fileToScan, {
@@ -602,16 +783,6 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
       const finalPageHeight = result.page?.height || 0
       const ocrIsLandscape = finalPageWidth > finalPageHeight
       
-      console.log("📊 [V2] OCR Result (Normalized):", {
-        fileName: result.fileName,
-        pageWidth: finalPageWidth,
-        pageHeight: finalPageHeight,
-        orientation: ocrIsLandscape ? "Landscape" : "Portrait",
-        wordsCount: result.words?.length || 0,
-        words: result.words?.slice(0, 5), // First 5 words for debugging
-        isOriginalPdf,
-        normalized: true, // Indicates this result is from normalization pipeline
-      })
       
       // IMPORTANT: When using manual rotation, the preview image should already be rotated
       // via CSS transform (transform: rotate(${imageRotation}deg))
@@ -625,9 +796,7 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
       
       // IMPORTANT: Use normalized image from runOCR if available
       // This ensures the preview image matches the OCR result exactly
-      if (normalizedImageUrl) {
-        console.log(`📸 [V2] Received normalized image from runOCR`)
-        
+      if (normalizedImageUrl && normalizedImageUrl.startsWith("blob:")) {
         // Revoke old image URL to prevent memory leak
         if (imageUrl && imageUrl.startsWith("blob:")) {
           URL.revokeObjectURL(imageUrl)
@@ -635,24 +804,36 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
         
         // Update preview image to use normalized image from runOCR
         setImageUrl(normalizedImageUrl)
-        
-        // IMPORTANT: Keep rotation value - don't reset it
-        // The normalized image from Firebase already has rotation applied
-        // But we need to keep the rotation state for saving to template
-        // Only reset rotation when changing files (in handleFileSelect)
-        console.log(`✅ [V2] Preview image updated to normalized image from runOCR`)
-        console.log(`📐 [V2] Rotation kept at ${imageRotation}° (for saving to template)`)
+      } else if (result.normalizedImageBase64 && result.normalizedImageBase64.length > 100) {
+        // Fallback: Create blob URL from normalizedImageBase64 if normalizedImageUrl is not available
+        try {
+          // Revoke old image URL to prevent memory leak
+          if (imageUrl && imageUrl.startsWith("blob:")) {
+            URL.revokeObjectURL(imageUrl)
+          }
+          
+          const normalizedImageBlob = await fetch(
+            `data:image/png;base64,${result.normalizedImageBase64}`
+          ).then((r) => r.blob())
+          const blobUrl = URL.createObjectURL(normalizedImageBlob)
+          setImageUrl(blobUrl)
+        } catch (err) {
+          console.error(`❌ [V2] Failed to create blob URL from normalizedImageBase64:`, err)
+        }
       } else {
-        console.log(`⚠️ [V2] No normalized image in OCR result, keeping original image with CSS transform`)
+        console.warn(`⚠️ [V2] No normalized image in OCR result`)
       }
       
       // IMPORTANT: Keep imageRotation state - don't reset it (unless we got normalized image)
       // The preview image will be displayed with CSS transform based on imageRotation
       setOcrResult(result)
+      // Reset zoom to 100% when new OCR result is loaded
+      setZoomLevel(1.0)
+      
+      // Zoom removed - displaySize will be calculated to fit card automatically
       
       // Log after state update to verify imageRotation is preserved
       setTimeout(() => {
-        console.log(`✅ [V2] OCR result set, imageRotation: ${imageRotation}°`)
       }, 100)
 
       // Consume credits
@@ -660,11 +841,17 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
         onConsume(1)
       }
 
-      console.log(`✅ [V2] OCR v2 completed: ${result.words?.length || 0} words found`)
       
       if (!result.words || result.words.length === 0) {
         setError("⚠️ No words detected in the document. Please try a different image or check if the document is readable.")
       }
+
+      // Scroll to Step 2 after OCR completes
+      setTimeout(() => {
+        if (step2Ref.current) {
+          step2Ref.current.scrollIntoView({ behavior: "smooth", block: "start" })
+        }
+      }, 300) // Small delay to ensure DOM is updated
     } catch (err) {
       console.error("❌ [V2] OCR v2 error:", err)
       setError(`OCR v2 failed: ${err.message}`)
@@ -673,48 +860,32 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
     }
   }
 
-  // Calculate scale factor
-  // IMPORTANT: If using normalized image from Firebase, no rotation adjustment needed
-  // The normalized image already matches OCR result dimensions exactly
-  // If using CSS transform rotation, we need to account for rotation
+  // Calculate scale factor to map OCR coordinates to display coordinates
+  // CRITICAL: Use displaySize directly to ensure perfect alignment with rendered image
+  // Calculate scale factor from natural image dimensions and displaySize
+  // Use natural image dimensions as the base (not OCR dimensions)
+  // scale = displaySize / natural dimensions (calculated to fit card)
   const getScaleFactor = useCallback(() => {
-    if (!ocrResult || !displaySize) {
+    const image = imageRef.current
+    if (!image || !displaySize) {
       return { scaleX: 1, scaleY: 1 }
     }
-    const ocrWidth = ocrResult.page.width
-    const ocrHeight = ocrResult.page.height
     
-    // If using normalized image from Firebase, dimensions already match exactly
-    if (ocrResult.normalizedImageBase64) {
-      const scaleX = ocrWidth > 0 ? displaySize.width / ocrWidth : 1
-      const scaleY = ocrHeight > 0 ? displaySize.height / ocrHeight : 1
-      console.log(`📐 [Scale] Using normalized image from Firebase - direct scale calculation`)
-      console.log(`📐 [Scale] OCR: ${ocrWidth}x${ocrHeight}, Display: ${displaySize.width}x${displaySize.height}`)
-      console.log(`📐 [Scale] Scale factors: scaleX=${scaleX.toFixed(4)}, scaleY=${scaleY.toFixed(4)}`)
+    const naturalWidth = image.naturalWidth || 0
+    const naturalHeight = image.naturalHeight || 0
+    
+    if (naturalWidth > 0 && naturalHeight > 0) {
+      // Scale based on natural image dimensions
+      // displaySize is calculated to fit card, so scale = displaySize / natural dimensions
+      const scaleX = naturalWidth > 0 ? displaySize.width / naturalWidth : 1
+      const scaleY = naturalHeight > 0 ? displaySize.height / naturalHeight : 1
       return { scaleX, scaleY }
     }
     
-    // Otherwise, account for CSS transform rotation
-    let effectiveDisplayWidth = displaySize.width
-    let effectiveDisplayHeight = displaySize.height
-    
-    // When rotation is 90° or 270°, swap display dimensions to match rotated visual
-    if (imageRotation === 90 || imageRotation === 270) {
-      effectiveDisplayWidth = displaySize.height
-      effectiveDisplayHeight = displaySize.width
-    }
-    
-    const scaleX = ocrWidth > 0 ? effectiveDisplayWidth / ocrWidth : 1
-    const scaleY = ocrHeight > 0 ? effectiveDisplayHeight / ocrHeight : 1
-    
-    console.log(`📐 [Scale] Using CSS transform rotation: ${imageRotation}°`)
-    console.log(`📐 [Scale] OCR: ${ocrWidth}x${ocrHeight}, Display: ${displaySize.width}x${displaySize.height}`)
-    console.log(`📐 [Scale] Effective Display: ${effectiveDisplayWidth}x${effectiveDisplayHeight}`)
-    console.log(`📐 [Scale] Scale factors: scaleX=${scaleX.toFixed(4)}, scaleY=${scaleY.toFixed(4)}`)
-    
-    return { scaleX, scaleY }
-  }, [ocrResult, displaySize, imageRotation])
-
+    // Fallback: no scale
+    return { scaleX: 1, scaleY: 1 }
+  }, [displaySize])
+  
   const { scaleX, scaleY } = getScaleFactor()
 
   // Handle drag selection start - Now selects WORDS instead of LINES
@@ -733,6 +904,8 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
         return
       }
       
+      console.log(`🖱️ [Selection] Starting new selection. Current groups: ${groups.length}, selectedGroupId: ${selectedGroupId}`)
+      
       const rect = containerRef.current?.getBoundingClientRect()
       if (!rect) {
         console.log("⚠️ [Selection] Cannot start: no container rect")
@@ -745,22 +918,26 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
         setSelectedGroupId(null)
       }
 
-      // Calculate position relative to container (in OCR coordinates)
-      const x = (e.clientX - rect.left) / scaleX
-      const y = (e.clientY - rect.top) / scaleY
+      // Calculate position relative to container, accounting for image offset (in OCR coordinates)
+      // Convert screen coordinates to OCR coordinates using scale
+      const screenX = e.clientX - rect.left - imageOffset.x
+      const screenY = e.clientY - rect.top - imageOffset.y
+      const x = screenX / scaleX
+      const y = screenY / scaleY
 
-      console.log("🖱️ [Selection] Mouse down:", { x, y, scaleX, scaleY, mergedWordsCount: mergedWords.length })
+      console.log("🖱️ [Selection] Mouse down:", { x, y, mergedWordsCount: mergedWords.length })
 
       setIsSelecting(true)
       setSelectionStart({ x, y })
+      // Selection box in screen coordinates (relative to container, accounting for offset)
       setSelectionBox({ 
-        x: (e.clientX - rect.left), 
-        y: (e.clientY - rect.top), 
+        x: screenX, 
+        y: screenY, 
         w: 0, 
         h: 0 
       })
     },
-    [mergedWords, displaySize, scaleX, scaleY, selectedGroupId]
+    [mergedWords, displaySize, scaleX, scaleY, selectedGroupId, imageOffset, groups.length]
   )
 
   // Handle drag selection move
@@ -774,11 +951,12 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
       const rect = containerRef.current?.getBoundingClientRect()
       if (!rect) return
 
-      // Current position in screen coordinates
-      const currentScreenX = e.clientX - rect.left
-      const currentScreenY = e.clientY - rect.top
+      // Convert screen coordinates to OCR coordinates using scale
+      // OCR coordinates = screen coordinates / scale
+      const currentScreenX = e.clientX - rect.left - imageOffset.x
+      const currentScreenY = e.clientY - rect.top - imageOffset.y
       
-      // Start position in screen coordinates
+      // Start position in screen coordinates (from OCR coordinates * scale)
       const startScreenX = selectionStart.x * scaleX
       const startScreenY = selectionStart.y * scaleY
 
@@ -789,7 +967,7 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
 
       setSelectionBox({ x, y, w, h })
     },
-    [isSelecting, selectionStart, displaySize, scaleX, scaleY]
+    [isSelecting, selectionStart, displaySize, scaleX, scaleY, imageOffset]
   )
 
   // Handle drag selection end - create group from selected WORDS (not lines)
@@ -800,8 +978,9 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
     }
 
     // Check for merged words instead of raw words
+    // This is normal when user clicks without dragging (not an error)
     if (!isSelecting || !selectionBox || !mergedWords || mergedWords.length === 0) {
-      console.log("⚠️ [Selection] Mouse up: no selection or merged words")
+      // Silently reset selection state - this is normal behavior when clicking without dragging
       setIsSelecting(false)
       setSelectionStart(null)
       setSelectionBox(null)
@@ -825,8 +1004,6 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
     console.log("🖱️ [Selection] Mouse up:", {
       screenBox: selectionBox,
       ocrBox: { x: selectionX, y: selectionY, w: selectionW, h: selectionH },
-      scaleX,
-      scaleY,
     })
 
     // Find MERGED WORDS that intersect with selection box (connected words as single units)
@@ -846,7 +1023,8 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
       return intersects
     })
 
-    console.log(`✅ [Selection] Selected ${selectedWords.length} merged words out of ${mergedWords.length}`)
+      console.log(`✅ [Selection] Selected ${selectedWords.length} merged words out of ${mergedWords.length}`)
+      console.log(`📊 [Selection] Current groups before adding: ${groups.length}`)
 
     if (selectedWords.length > 0) {
       // Sort words by Y (top → bottom), then X (left → right)
@@ -913,7 +1091,12 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
         defaultValue: "", // Default value
       }
 
-      setGroups((prev) => [...prev, newGroup])
+      setGroups((prev) => {
+        const updated = [...prev, newGroup]
+        console.log(`✅ [Group] Adding new group. Previous: ${prev.length}, New total: ${updated.length}`)
+        console.log(`✅ [Group] New group ID: ${newGroup.id}, Label: ${newGroup.label}`)
+        return updated
+      })
       setHasUnsavedChanges(true) // Mark as unsaved when creating new group
       console.log(`✅ [Group] Created group: ${newGroup.label} with ${sortedWords.length} words, using selection box: ${groupX}, ${groupY}, ${groupW}x${groupH}`)
       console.log(`📝 [Group] Group text: "${mergedText}"`)
@@ -993,8 +1176,11 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
     setIsSelecting(false)
     setSelectionStart(null)
     setSelectionBox(null)
-    // Don't deselect group here - let user keep selection if they want
-  }, [isSelecting, selectionBox, mergedWords, groups.length, scaleX, scaleY])
+    // Deselect any selected group to allow creating new groups
+    if (selectedGroupId) {
+      setSelectedGroupId(null)
+    }
+  }, [isSelecting, selectionBox, mergedWords, groups.length, scaleX, scaleY, selectedGroupId])
 
   // Update group
   const handleGroupUpdate = useCallback((groupId, updates) => {
@@ -1169,8 +1355,9 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
 
-    const startX = (e.clientX - rect.left) / scaleX
-    const startY = (e.clientY - rect.top) / scaleY
+    // STEP 1: Screen coordinates = OCR coordinates (1:1 mapping, no scale)
+    const startX = e.clientX - rect.left - imageOffset.x
+    const startY = e.clientY - rect.top - imageOffset.y
 
     setIsDraggingGroup(true)
     setDragStart({ groupId, startX, startY, groupX: group.x, groupY: group.y })
@@ -1188,8 +1375,9 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
 
-    const startX = (e.clientX - rect.left) / scaleX
-    const startY = (e.clientY - rect.top) / scaleY
+    // STEP 1: Screen coordinates = OCR coordinates (1:1 mapping, no scale)
+    const startX = e.clientX - rect.left - imageOffset.x
+    const startY = e.clientY - rect.top - imageOffset.y
 
     setIsResizingGroup(true)
     setResizeHandle(handle)
@@ -1224,8 +1412,9 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
 
-    const currentX = (e.clientX - rect.left) / scaleX
-    const currentY = (e.clientY - rect.top) / scaleY
+    // Convert screen coordinates to OCR coordinates using scale
+    const currentX = (e.clientX - rect.left - imageOffset.x) / scaleX
+    const currentY = (e.clientY - rect.top - imageOffset.y) / scaleY
 
     if (isDraggingGroup) {
       // Calculate new position
@@ -1398,7 +1587,7 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
         })
       )
     }
-  }, [dragStart, isDraggingGroup, isResizingGroup, resizeHandle, scaleX, scaleY, groups, findWordsInBoundingBox])
+  }, [dragStart, isDraggingGroup, isResizingGroup, resizeHandle, scaleX, scaleY, imageOffset, groups, findWordsInBoundingBox])
 
   // Handle mouse up for dragging/resizing groups
   const handleGroupMouseUp = useCallback(() => {
@@ -2142,127 +2331,151 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
       </AppBar>
 
       <Box sx={{ width: "100%", p: 2.5 }}>
-        <Grid container spacing={2} sx={{ alignItems: "flex-start" }}>
-          {/* Left Column: Document & OCR */}
-          <Grid size={{ xs: 12, lg: 6 }}>
-            <Stack spacing={2} sx={{ height: "100%" }}>
-              {/* Step 1: Upload - การ์ดเล็ก */}
-              <Card sx={{ boxShadow: "0 4px 12px rgba(0,0,0,0.08)", borderRadius: 2 }}>
-                <CardContent sx={{ p: 0 }}>
-                  <Box sx={{ 
-                    background: "linear-gradient(135deg, #334155 0%, #475569 100%)",
-                    p: 2,
-                    borderTopLeftRadius: 8,
-                    borderTopRightRadius: 8,
-                  }}>
-                    <Typography variant="h6" fontWeight={600} sx={{ color: "#ffffff", fontSize: "1.1rem" }}>
-                      ขั้นตอนที่ 1: อัปโหลดเอกสาร
-                    </Typography>
-                  </Box>
-                  <Stack spacing={1.5} sx={{ p: 2 }}>
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/jpg,application/pdf"
-                      onChange={handleFileSelect}
-                      style={{ display: "none" }}
-                      id="template-settings-file-input"
-                    />
-                    <label htmlFor="template-settings-file-input">
-                      <Button
-                        variant="outlined"
-                        component="span"
-                        fullWidth
-                        startIcon={<UploadIcon />}
-                        sx={{ py: 1.5 }}
-                      >
-                        {imageFile ? imageFile.name : "เลือกไฟล์รูปภาพหรือ PDF"}
-                      </Button>
-                    </label>
+        {/* Step 1: Upload - Full Width with 2 Columns */}
+        <Box sx={{ mb: 2 }}>
+            <Card sx={{ boxShadow: "0 4px 12px rgba(0,0,0,0.08)", borderRadius: 2 }}>
+              <CardContent sx={{ p: 0 }}>
+                <Box sx={{ 
+                  background: "linear-gradient(135deg, #334155 0%, #475569 100%)",
+                  p: 2,
+                  borderTopLeftRadius: 8,
+                  borderTopRightRadius: 8,
+                }}>
+                  <Typography variant="h6" fontWeight={600} sx={{ color: "#ffffff", fontSize: "1.1rem" }}>
+                    ขั้นตอนที่ 1: อัปโหลดเอกสาร
+                  </Typography>
+                </Box>
+                <Box sx={{ p: 2 }}>
+                  <Grid container spacing={2}>
+                    {/* Left Column: Upload & Controls */}
+                    <Grid size={{ xs: 12, md: 5 }}>
+                      <Stack spacing={1.5}>
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/jpg,application/pdf"
+                          onChange={handleFileSelect}
+                          style={{ display: "none" }}
+                          id="template-settings-file-input"
+                        />
+                        <label htmlFor="template-settings-file-input">
+                          <Button
+                            variant="outlined"
+                            component="span"
+                            fullWidth
+                            startIcon={<UploadIcon />}
+                            sx={{ py: 1.5 }}
+                          >
+                            {imageFile ? imageFile.name : "เลือกไฟล์รูปภาพหรือ PDF"}
+                          </Button>
+                        </label>
 
-                    {imageFile && (
-                      <>
-                        {extractingPdf && (
-                          <Alert severity="info" sx={{ mt: 1.5, borderRadius: 1.5 }}>
-                            📄 กำลังดึงหน้าแรกจาก PDF... กรุณารอสักครู่
-                          </Alert>
-                        )}
-                        {imageUrl && !extractingPdf && (
+                        {imageFile && (
                           <>
-                            <Alert severity="success" sx={{ mt: 1.5, borderRadius: 1.5 }}>
-                              ✅ พร้อมแสดงตัวอย่างหน้าแรก ปรับการหมุนหากจำเป็น แล้วรัน OCR
-                            </Alert>
-                            
-                            {/* Page Selection (only for PDF files) */}
-                            {(imageFile?.type === "application/pdf" || imageFile?.name?.toLowerCase().endsWith(".pdf")) && (
-                              <Box sx={{ mt: 2, p: 2, bgcolor: "#f8fafc", borderRadius: 1.5, border: "1px solid #e2e8f0" }}>
-                                <Typography variant="caption" sx={{ color: "#64748b", mb: 1, display: "block", fontWeight: 500 }}>
-                                  เลือกหน้าที่จะแสดงตัวอย่าง (Preview):
-                                </Typography>
-                                <TextField
-                                  fullWidth
-                                  size="small"
-                                  label="หน้า"
-                                  placeholder={totalPages ? `เช่น: 2 (1-${totalPages})` : "เช่น: 2 (ไม่ระบุ = หน้าแรก)"}
-                                  value={previewPage}
-                                  onChange={(e) => {
-                                    const value = e.target.value;
-                                    // Only allow numbers
-                                    if (value === "" || /^\d+$/.test(value)) {
-                                      setPreviewPage(value);
-                                    }
-                                  }}
-                                  onBlur={(e) => {
-                                    // Validate on blur (when user finishes typing)
-                                    const value = e.target.value;
-                                    if (value) {
-                                      const pageNum = parseInt(value, 10);
-                                      if (isNaN(pageNum) || pageNum < 1) {
-                                        setPreviewPage("");
-                                        setError("หมายเลขหน้าต้องเป็นตัวเลขที่มากกว่า 0");
-                                      } else if (totalPages && pageNum > totalPages) {
-                                        setPreviewPage(totalPages.toString());
-                                        setError(`เอกสารมี ${totalPages} หน้า`);
-                                      } else {
-                                        setError(null);
-                                      }
-                                    }
-                                  }}
-                                  type="number"
-                                  inputProps={{ 
-                                    min: 1,
-                                    max: totalPages || undefined
-                                  }}
-                                  sx={{
-                                    bgcolor: "#ffffff",
-                                  }}
-                                  helperText={totalPages 
-                                    ? `ระบุหน้าตัวอย่างที่จะแสดงและสแกน (1-${totalPages}, ไม่ระบุ = หน้าแรก)`
-                                    : "ระบุหน้าตัวอย่างที่จะแสดงและสแกน (ไม่ระบุ = หน้าแรก)"
-                                  }
-                                />
-                                {previewPage && (
-                                  <Typography variant="caption" sx={{ color: "#10b981", mt: 1, display: "block" }}>
-                                    ✓ จะแสดงตัวอย่างและสแกนหน้า {previewPage}
-                                  </Typography>
-                                )}
-                              </Box>
+                            {extractingPdf && (
+                              <Alert severity="info" sx={{ borderRadius: 1.5 }}>
+                                📄 กำลังดึงหน้าแรกจาก PDF... กรุณารอสักครู่
+                              </Alert>
                             )}
-                            
-                            <Box sx={{ display: "flex", gap: 1, mt: 2 }}>
-                              <Button
-                                variant="outlined"
-                                onClick={handleRotate}
-                                disabled={!imageUrl}
-                                startIcon={<RotateRightIcon />}
-                                sx={{ flex: 1 }}
-                              >
-                                หมุน ({imageRotation}°)
-                              </Button>
+                            {imageUrl && !extractingPdf && (
+                              <>
+                                <Alert severity="success" sx={{ borderRadius: 1.5 }}>
+                                  ✅ พร้อมแสดงตัวอย่าง ปรับการหมุนหากจำเป็น แล้วรัน OCR
+                                </Alert>
+                                
+                                {/* Page Selection - only for PDF files */}
+                                {(imageFile?.type === "application/pdf" || imageFile?.name?.toLowerCase().endsWith(".pdf")) && (
+                                  <Box sx={{ 
+                                    p: 2, 
+                                    bgcolor: "#f8fafc", 
+                                    borderRadius: 1.5, 
+                                    border: "1px solid #e2e8f0" 
+                                  }}>
+                                    <Typography variant="caption" sx={{ color: "#64748b", mb: 1, display: "block", fontWeight: 500 }}>
+                                      เลือกหน้า:
+                                    </Typography>
+                                    <TextField
+                                      fullWidth
+                                      size="small"
+                                      label="หน้า"
+                                      placeholder={totalPages ? `เช่น: 2` : "เช่น: 2 (ไม่ระบุ = หน้าแรก)"}
+                                      value={previewPage}
+                                      onChange={(e) => {
+                                        const value = e.target.value;
+                                        // Only allow numbers
+                                        if (value === "" || /^\d+$/.test(value)) {
+                                          setPreviewPage(value);
+                                        }
+                                      }}
+                                      onBlur={(e) => {
+                                        // Validate on blur (when user finishes typing)
+                                        const value = e.target.value;
+                                        if (value) {
+                                          const pageNum = parseInt(value, 10);
+                                          if (isNaN(pageNum) || pageNum < 1) {
+                                            setPreviewPage("");
+                                            setError("หมายเลขหน้าต้องเป็นตัวเลขที่มากกว่า 0");
+                                          } else if (totalPages && pageNum > totalPages) {
+                                            setPreviewPage(totalPages.toString());
+                                            setError(`เอกสารมี ${totalPages} หน้า`);
+                                          } else {
+                                            setError(null);
+                                          }
+                                        }
+                                      }}
+                                      type="number"
+                                      inputProps={{ 
+                                        min: 1,
+                                        max: totalPages || undefined
+                                      }}
+                                      sx={{
+                                        bgcolor: "#ffffff",
+                                      }}
+                                    />
+                                    {previewPage && (
+                                      <Typography variant="caption" sx={{ color: "#10b981", mt: 1, display: "block" }}>
+                                        ✓ หน้า {previewPage}
+                                      </Typography>
+                                    )}
+                                  </Box>
+                                )}
+
+                                {/* Rotate Button */}
+                                <Button
+                                  variant="outlined"
+                                  onClick={handleRotate}
+                                  disabled={!imageUrl}
+                                  startIcon={<RotateRightIcon />}
+                                  fullWidth
+                                >
+                                  หมุน ({imageRotation}°)
+                                </Button>
+
+                                {/* Run OCR Button */}
+                                <Button
+                                  variant="contained"
+                                  onClick={handleRunOCR}
+                                  disabled={loading || extractingPdf || !imageUrl}
+                                  fullWidth
+                                  sx={{ py: 1.5 }}
+                                >
+                                  {loading ? (
+                                    <>
+                                      <CircularProgress size={20} sx={{ mr: 1 }} />
+                                      กำลังรัน OCR v2...
+                                    </>
+                                  ) : (
+                                    "รัน OCR v2"
+                                  )}
+                                </Button>
+                              </>
+                            )}
+                            {!imageUrl && !extractingPdf && (
                               <Button
                                 variant="contained"
                                 onClick={handleRunOCR}
                                 disabled={loading || extractingPdf || !imageUrl}
-                                sx={{ flex: 2 }}
+                                fullWidth
+                                sx={{ py: 1.5 }}
                               >
                                 {loading ? (
                                   <>
@@ -2273,59 +2486,113 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
                                   "รัน OCR v2"
                                 )}
                               </Button>
-                            </Box>
+                            )}
                           </>
                         )}
-                        {!imageUrl && !extractingPdf && (
-                          <Button
-                            variant="contained"
-                            onClick={handleRunOCR}
-                            disabled={loading || extractingPdf || !imageUrl}
-                            fullWidth
-                            sx={{ py: 1.5, mt: 2 }}
-                          >
-                            {loading ? (
-                              <>
-                                <CircularProgress size={20} sx={{ mr: 1 }} />
-                                กำลังรัน OCR v2...
-                              </>
-                            ) : (
-                              "รัน OCR v2"
-                            )}
-                          </Button>
-                        )}
-                      </>
-                    )}
-                  </Stack>
-                </CardContent>
-              </Card>
+                      </Stack>
+                    </Grid>
 
-              {/* Alerts */}
-              {error && (
-                <Alert severity="error" onClose={() => setError(null)}>
-                  {error}
-                </Alert>
-              )}
+                    {/* Right Column: Preview Image (Small) */}
+                    <Grid size={{ xs: 12, md: 7 }}>
+                      {imageUrl && !extractingPdf && (
+                        <Box sx={{ 
+                          border: "2px solid #e2e8f0",
+                          borderRadius: 1.5,
+                          overflow: "hidden",
+                          bgcolor: "#ffffff",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          minHeight: 325,
+                          maxHeight: 400,
+                          height: "100%",
+                        }}>
+                          <img
+                            ref={imageRef}
+                            src={imageUrl}
+                            alt={imageFile?.name || "Document Preview"}
+                            draggable={false}
+                            style={{
+                              maxWidth: "100%",
+                              maxHeight: "100%",
+                              objectFit: "contain",
+                              display: "block",
+                              pointerEvents: "none",
+                              userSelect: "none",
+                              ...(ocrResult?.normalizedImageBase64 ? {} : {
+                                transform: `rotate(${imageRotation}deg)`,
+                                transformOrigin: "center center",
+                              }),
+                            }}
+                          />
+                        </Box>
+                      )}
+                      {extractingPdf && (
+                        <Box sx={{ 
+                          border: "2px solid #e2e8f0",
+                          borderRadius: 1.5,
+                          bgcolor: "#f8fafc",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          minHeight: 250,
+                          maxHeight: 300,
+                          height: "100%",
+                        }}>
+                          <Stack spacing={2} alignItems="center">
+                            <CircularProgress />
+                            <Typography variant="body2" color="text.secondary">
+                              กำลังดึงหน้าแรกจาก PDF...
+                            </Typography>
+                          </Stack>
+                        </Box>
+                      )}
+                      {!imageUrl && !extractingPdf && (
+                        <Box sx={{ 
+                          border: "2px solid #e2e8f0",
+                          borderRadius: 1.5,
+                          bgcolor: "#f8fafc",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          minHeight: 250,
+                          maxHeight: 300,
+                          height: "100%",
+                        }}>
+                          <Typography variant="body2" color="text.secondary" sx={{ textAlign: "center" }}>
+                            เลือกไฟล์เพื่อแสดงตัวอย่าง
+                          </Typography>
+                        </Box>
+                      )}
+                    </Grid>
+                  </Grid>
+                </Box>
+              </CardContent>
+            </Card>
+        </Box>
 
-              {success && (
-                <Alert severity="success" onClose={() => setSuccess(null)}>
-                  {success}
-                </Alert>
-              )}
-            </Stack>
-          </Grid>
+        {/* Alerts */}
+        {error && (
+          <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        )}
 
-          {/* Right Column: Template Management */}
-          <Grid size={{ xs: 12, lg: 6 }}>
-            <Stack spacing={2} sx={{ height: "100%" }}>
-              {/* Saved Templates Section - อยู่แถวเดียวกับ Step 1 */}
-              <Card sx={{ 
-                boxShadow: "0 4px 12px rgba(0,0,0,0.08)", 
-                borderRadius: 2,
-                width: "100%",
-                display: "flex",
-                flexDirection: "column",
-              }}>
+        {success && (
+          <Alert severity="success" onClose={() => setSuccess(null)} sx={{ mb: 2 }}>
+            {success}
+          </Alert>
+        )}
+
+        {/* Step 2: Document with OCR Line Overlay - แสดงเต็มหน้าจอ */}
+        {ocrResult && imageFile && (
+          <Box ref={step2Ref}>
+            <Grid container spacing={2} sx={{ mt: 2 }}>
+            <Grid size={{ xs: 12 }}>
+              <Card 
+                ref={cardRef}
+                sx={{ boxShadow: "0 4px 12px rgba(0,0,0,0.08)", borderRadius: 2, display: "flex", flexDirection: "column" }}
+              >
                   <CardContent sx={{ p: 0, flex: 1, display: "flex", flexDirection: "column" }}>
                     <Box sx={{ 
                       background: "linear-gradient(135deg, #334155 0%, #475569 100%)",
@@ -2333,28 +2600,459 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
                       borderTopLeftRadius: 8,
                       borderTopRightRadius: 8,
                     }}>
-                      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1 }}>
+                      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2 }}>
                         <Typography variant="h6" fontWeight={600} sx={{ color: "#ffffff", fontSize: "1.1rem" }}>
-                          เทมเพลตของคุณ ({templates.length})
+                          ขั้นตอนที่ 2: เลือกข้อความ (ลากเพื่อสร้างกลุ่ม)
                         </Typography>
-                        <IconButton
-                          onClick={() => {
-                            setTemplateName("")
-                            setSelectedTemplateId(null)
-                            setHasUnsavedChanges(false)
-                            setGroups([])
-                          }}
-                          sx={{
-                            color: "#ffffff",
-                            bgcolor: "rgba(255, 255, 255, 0.1)",
-                            "&:hover": {
-                              bgcolor: "rgba(255, 255, 255, 0.2)",
-                            },
-                          }}
-                        >
-                          <AddIcon />
-                        </IconButton>
+                        {/* Zoom Controls */}
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <IconButton
+                            size="small"
+                            onClick={() => setZoomLevel(prev => Math.max(0.1, prev - 0.1))}
+                            sx={{ 
+                              color: "#ffffff",
+                              bgcolor: "rgba(255, 255, 255, 0.1)",
+                              "&:hover": { bgcolor: "rgba(255, 255, 255, 0.2)" }
+                            }}
+                            disabled={zoomLevel <= 0.1}
+                          >
+                            <RemoveIcon />
+                          </IconButton>
+                          <Typography variant="body2" sx={{ color: "#ffffff", minWidth: 50, textAlign: "center" }}>
+                            {Math.round(zoomLevel * 100)}%
+                          </Typography>
+                          <IconButton
+                            size="small"
+                            onClick={() => setZoomLevel(prev => Math.min(2.0, prev + 0.1))}
+                            sx={{ 
+                              color: "#ffffff",
+                              bgcolor: "rgba(255, 255, 255, 0.1)",
+                              "&:hover": { bgcolor: "rgba(255, 255, 255, 0.2)" }
+                            }}
+                            disabled={zoomLevel >= 2.0}
+                          >
+                            <AddIcon />
+                          </IconButton>
+                        </Box>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flex: 1, justifyContent: "flex-end" }}>
+                          {lines.length > 0 ? (
+                            <>
+                              <Chip label={`${lines.length} lines`} size="small" />
+                              {groups.length > 0 && (
+                                <Chip label={`${groups.length} group${groups.length !== 1 ? "s" : ""}`} color="primary" />
+                              )}
+                            </>
+                          ) : ocrResult ? (
+                            <Chip 
+                              label={`${ocrResult.words?.length || 0} words found`} 
+                              size="small" 
+                              color={ocrResult.words?.length > 0 ? "default" : "warning"} 
+                            />
+                          ) : (
+                            <Chip 
+                              label="Preview ready" 
+                              size="small" 
+                              color="info" 
+                            />
+                          )}
+                        </Box>
                       </Box>
+                    </Box>
+                    <Stack spacing={1.5} sx={{ p: 2, flex: 1, display: "flex", flexDirection: "column" }}>
+                      {ocrResult && (!ocrResult.words || ocrResult.words.length === 0) && (
+                        <Alert severity="warning">
+                          No words detected in this document. Please try a different image or check if the document is readable.
+                        </Alert>
+                      )}
+
+                      {ocrResult && ocrResult.words && ocrResult.words.length > 0 && lines.length === 0 && (
+                        <Alert severity="info">
+                          Words detected but could not be merged into lines. Please check the OCR result.
+                        </Alert>
+                      )}
+
+                      {!ocrResult && imageUrl && (
+                        <Alert severity="info">
+                          First page preview displayed. Click "Run OCR v2" to scan the document.
+                        </Alert>
+                      )}
+
+                      <Box
+                        ref={containerRef}
+                        sx={{
+                          position: "relative",
+                          border: "2px solid #e2e8f0",
+                          borderRadius: 2,
+                          overflow: "auto", // Allow scrolling if content is too large
+                          bgcolor: "#ffffff",
+                          width: "100%",
+                          height: "calc(100vh - 200px)", // Full screen height
+                          minHeight: "calc(100vh - 200px)", // Match height to fill screen
+                          userSelect: "none", // Prevent text selection
+                        }}
+                      >
+                        {/* Layer 1: Document Image - Show when OCR result exists */}
+                        {ocrResult && imageUrl ? (
+                          <Box sx={{ 
+                            position: "absolute", // Position relative to container
+                            top: 0,
+                            left: 0,
+                            width: displaySize ? `${displaySize.width + imageOffset.x * 2}px` : "100%",
+                            height: displaySize ? `${displaySize.height}px` : "100%",
+                            minHeight: displaySize ? `${displaySize.height}px` : "auto",
+                            overflow: "visible", // Allow image to be visible even with offset
+                          }}>
+                            <img
+                              ref={imageRef}
+                              src={imageUrl}
+                              alt={ocrResult?.fileName || imageFile?.name || "Document"}
+                              draggable={false}
+                              style={{
+                                // CRITICAL: Use natural size and CSS transform scale to control size precisely
+                                // This method gives us full control over image size from Firebase
+                                width: (imageRef.current?.naturalWidth || ocrResult?.page?.width || 0) + "px",
+                                height: (imageRef.current?.naturalHeight || ocrResult?.page?.height || 0) + "px",
+                                display: "block",
+                                objectFit: "none", // Prevent browser scaling
+                                objectPosition: "top left", // Position from top-left (same as tokens/groups)
+                                pointerEvents: "none",
+                                userSelect: "none",
+                                boxSizing: "border-box",
+                                transformOrigin: "top left", // Scale from top-left (same as tokens/groups)
+                                // CRITICAL: Use imageOffset to position image (same as tokens/groups)
+                                position: "absolute",
+                                top: `${imageOffset.y}px`,
+                                left: `${imageOffset.x}px`,
+                              }}
+                              onLoad={(e) => {
+                                const img = e.currentTarget
+                                const naturalWidth = img.naturalWidth
+                                const naturalHeight = img.naturalHeight
+                                
+                                // Force update displaySize and apply transform when image loads
+                                if (ocrResult?.page && naturalWidth > 0 && naturalHeight > 0) {
+                                  const container = containerRef.current
+                                  const card = cardRef.current
+                                  
+                                  if (container && card) {
+                                    const cardWidth = card.clientWidth
+                                    const containerHeight = container.clientHeight
+                                    const padding = 32
+                                    const availableWidth = cardWidth - padding
+                                    const availableHeight = containerHeight - 20
+                                    
+                                    // Calculate base scale to fit card
+                                    const scaleForWidth = availableWidth / naturalWidth
+                                    const scaleForHeight = availableHeight / naturalHeight
+                                    const baseScale = Math.min(scaleForWidth, scaleForHeight)
+                                    
+                                    // Apply zoomLevel to base scale
+                                    const finalScale = baseScale * zoomLevel
+                                    
+                                    // Calculate displayed size with zoom
+                                    const displayedWidth = naturalWidth * finalScale
+                                    const displayedHeight = naturalHeight * finalScale
+                                    
+                                    setDisplaySize({
+                                      width: displayedWidth,
+                                      height: displayedHeight,
+                                    })
+                                    
+                                    // CRITICAL: Calculate scaleX and scaleY from displayedWidth/Height (same formula as useLayoutEffect)
+                                    // This ensures the image uses the exact same scale as tokens and groups
+                                    const scaleX = naturalWidth > 0 ? displayedWidth / naturalWidth : 1
+                                    const scaleY = naturalHeight > 0 ? displayedHeight / naturalHeight : 1
+                                    
+                                    // CRITICAL: Use CSS transform scale to control image size precisely
+                                    // Set image to natural size first
+                                    img.style.width = `${naturalWidth}px`
+                                    img.style.height = `${naturalHeight}px`
+                                    
+                                    // Then apply CSS transform scale using scaleX and scaleY (same as useLayoutEffect)
+                                    if (ocrResult?.normalizedImageBase64) {
+                                      img.style.transform = `scale(${scaleX}, ${scaleY})`
+                                    } else {
+                                      img.style.transform = `scale(${scaleX}, ${scaleY}) rotate(${imageRotation}deg)`
+                                    }
+                                    img.style.transformOrigin = "top left" // Match tokens/groups positioning
+                                    
+                                    // Calculate offset for centered image (same as useLayoutEffect)
+                                    const containerRectForOffset = container.getBoundingClientRect()
+                                    const containerWidthForOffset = containerRectForOffset.width
+                                    const offsetXForOffset = (containerWidthForOffset - displayedWidth) / 2
+                                    setImageOffset({ x: Math.max(0, offsetXForOffset), y: 0 })
+                                  }
+                                }
+                              }}
+                            />
+                          </Box>
+                        ) : extractingPdf ? (
+                          <Box
+                            sx={{
+                              width: "100%",
+                              minHeight: 300,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              bgcolor: "#f8fafc",
+                            }}
+                          >
+                            <Stack spacing={2} alignItems="center">
+                              <CircularProgress />
+                              <Typography variant="body2" color="text.secondary">
+                                Extracting first page from PDF...
+                              </Typography>
+                            </Stack>
+                          </Box>
+                        ) : (
+                          <Box
+                            sx={{
+                              width: "100%",
+                              minHeight: 300,
+                              bgcolor: "#f8fafc",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                          >
+                            <Typography variant="body2" color="text.secondary">
+                              รัน OCR เพื่อเริ่มเลือกข้อความ
+                            </Typography>
+                          </Box>
+                        )}
+
+                        {/* Layer 2: OCR Word Overlay - Visual only, pointer-events: none */}
+                        {/* Show merged words (connected words as single units) */}
+                        {displaySize && mergedWords && mergedWords.length > 0 && (
+                          <Box
+                            sx={{
+                              position: "absolute",
+                              top: imageOffset.y,
+                              left: imageOffset.x,
+                              width: displaySize.width,
+                              height: displaySize.height,
+                              pointerEvents: "none",
+                              zIndex: 1,
+                            }}
+                          >
+                            <OCRWordLayer
+                              words={mergedWords}
+                              scaleX={scaleX}
+                              scaleY={scaleY}
+                              selectedWordIndices={new Set()} // Words are selected via drag, not click
+                            />
+                          </Box>
+                        )}
+
+                        {/* Layer 2b: Group Display - Interactive layer for group selection/drag/resize */}
+                        {displaySize && groups.length > 0 && (
+                          <Box
+                            sx={{
+                              position: "absolute",
+                              top: imageOffset.y,
+                              left: imageOffset.x,
+                              width: displaySize.width,
+                              height: displaySize.height,
+                              pointerEvents: "none", // Don't block events - only groups themselves will capture
+                              zIndex: 2,
+                            }}
+                          >
+                            <GroupSelectionLayer
+                              groups={groups}
+                              scaleX={scaleX}
+                              scaleY={scaleY}
+                              isSelecting={isSelecting}
+                              selectionBox={selectionBox}
+                              selectedGroupId={selectedGroupId}
+                              onGroupClick={handleGroupClick}
+                              onGroupDragStart={handleGroupDragStart}
+                              onGroupResizeStart={handleGroupResizeStart}
+                              onGroupDelete={handleGroupDelete}
+                            />
+                          </Box>
+                        )}
+
+                        {/* Layer 3: Interaction Layer - Handles selection box (always available, but lower z-index than groups) */}
+                        {displaySize && (
+                          <Box
+                            sx={{
+                              position: "absolute",
+                              top: imageOffset.y,
+                              left: imageOffset.x,
+                              width: displaySize.width,
+                              height: displaySize.height,
+                              pointerEvents: "auto",
+                              zIndex: 1,
+                            }}
+                          >
+                            <InteractionLayer
+                            onMouseDown={(e) => {
+                              // Don't start selection if dragging or resizing a group
+                              if (isDraggingGroup || isResizingGroup) {
+                                console.log("⚠️ [InteractionLayer] Ignoring mousedown - dragging/resizing group")
+                                return
+                              }
+
+                              // Check if clicking on a group - if yes, let GroupSelectionLayer handle it
+                              const rect = containerRef.current?.getBoundingClientRect()
+                              if (rect) {
+                                // Convert screen coordinates to OCR coordinates using scale
+                                const x = (e.clientX - rect.left - imageOffset.x) / scaleX
+                                const y = (e.clientY - rect.top - imageOffset.y) / scaleY
+                                const clickedGroup = groups.find((g) => {
+                                  return x >= g.x && x <= g.x + g.w && y >= g.y && y <= g.y + g.h
+                                })
+                                if (clickedGroup) {
+                                  // Clicked on a group - let GroupSelectionLayer handle it via its own onClick
+                                  // Don't prevent default - let the event bubble to GroupSelectionLayer
+                                  console.log(`🖱️ [InteractionLayer] Clicked on group ${clickedGroup.id} - letting GroupSelectionLayer handle`)
+                                  return // Don't start selection
+                                } else {
+                                  // Clicked outside groups - deselect and start new selection
+                                  // This allows creating unlimited groups
+                                  console.log(`🖱️ [InteractionLayer] Clicked outside groups - starting new selection`)
+                                  if (selectedGroupId) {
+                                    console.log(`🖱️ [Group] Deselecting group ${selectedGroupId} to allow new selection`)
+                                    setSelectedGroupId(null)
+                                  }
+                                  // Reset any drag/resize state to ensure clean start for new selection
+                                  if (isDraggingGroup || isResizingGroup) {
+                                    setIsDraggingGroup(false)
+                                    setIsResizingGroup(false)
+                                    setDragStart(null)
+                                    setResizeHandle(null)
+                                  }
+                                  handleMouseDown(e)
+                                }
+                              } else {
+                                // No rect - deselect and start selection
+                                if (selectedGroupId) {
+                                  setSelectedGroupId(null)
+                                }
+                                handleMouseDown(e)
+                              }
+                            }}
+                            onMouseMove={(e) => {
+                              // Only handle mouse move if not dragging/resizing group
+                              if (!isDraggingGroup && !isResizingGroup) {
+                                handleMouseMove(e)
+                              }
+                            }}
+                            onMouseUp={(e) => {
+                              // Only handle mouse up if not dragging/resizing group
+                              if (!isDraggingGroup && !isResizingGroup) {
+                                handleMouseUp(e)
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              // Only handle mouse leave if not dragging/resizing group
+                              if (!isDraggingGroup && !isResizingGroup) {
+                                handleMouseUp(e)
+                              }
+                            }}
+                            isSelecting={isSelecting}
+                            selectionBox={selectionBox}
+                            scaleX={scaleX}
+                            scaleY={scaleY}
+                          />
+                          </Box>
+                        )}
+                        
+                        {/* Layer 4: Global mouse move/up for group drag/resize (when group is selected) */}
+                        {/* This layer captures mouse events during drag/resize, but allows clicks on UI elements */}
+                        {displaySize && (isDraggingGroup || isResizingGroup) && (
+                          <Box
+                            sx={{
+                              position: "fixed", // Use fixed to capture events outside container
+                              top: 0,
+                              left: 0,
+                              width: "100vw",
+                              height: "100vh",
+                              pointerEvents: "auto", // Must be auto to receive events
+                              zIndex: 9999, // Very high to capture all events
+                              bgcolor: "transparent",
+                            }}
+                            onMouseMove={(e) => {
+                              // Don't prevent default - allow other handlers to work
+                              // Only handle if still dragging/resizing
+                              if (isDraggingGroup || isResizingGroup) {
+                                handleGroupMouseMove(e)
+                              }
+                            }}
+                            onMouseUp={(e) => {
+                              // Check if clicking on a button or UI element - if yes, don't prevent
+                              const target = e.target
+                              const isUIElement = target.closest('button') || 
+                                                  target.closest('[role="button"]') ||
+                                                  target.closest('.MuiButton-root') ||
+                                                  target.closest('.MuiIconButton-root')
+                              
+                              if (!isUIElement) {
+                                // Only prevent if not clicking on UI element
+                                e.preventDefault()
+                                e.stopPropagation()
+                              }
+                              
+                              // Always handle mouse up to end drag/resize
+                              if (isDraggingGroup || isResizingGroup) {
+                                handleGroupMouseUp()
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              // Only handle if still dragging/resizing
+                              if (isDraggingGroup || isResizingGroup) {
+                                handleGroupMouseUp()
+                              }
+                            }}
+                            onClick={(e) => {
+                              // Allow clicks on UI elements to pass through
+                              const target = e.target
+                              const isUIElement = target.closest('button') || 
+                                                  target.closest('[role="button"]') ||
+                                                  target.closest('.MuiButton-root') ||
+                                                  target.closest('.MuiIconButton-root')
+                              
+                              if (isUIElement) {
+                                // Don't prevent clicks on UI elements
+                                return
+                              }
+                              
+                              // For other clicks, prevent to avoid triggering unwanted actions
+                              e.preventDefault()
+                              e.stopPropagation()
+                            }}
+                          >
+                          </Box>
+                        )}
+                      </Box>
+                    </Stack>
+                  </CardContent>
+                </Card>
+            </Grid>
+          </Grid>
+          
+          {/* Step 3: Templates */}
+          <Grid container spacing={2} sx={{ mt: 2 }}>
+            {/* Templates Column */}
+            <Grid size={{ xs: 12 }}>
+              <Stack spacing={2} sx={{ height: "100%" }}>
+                <Card sx={{ 
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)", 
+                  borderRadius: 2,
+                  width: "100%",
+                  display: "flex",
+                  flexDirection: "column",
+                }}>
+                  <CardContent sx={{ p: 0, flex: 1, display: "flex", flexDirection: "column" }}>
+                    <Box sx={{ 
+                      background: "linear-gradient(135deg, #334155 0%, #475569 100%)",
+                      p: 2,
+                      borderTopLeftRadius: 8,
+                      borderTopRightRadius: 8,
+                    }}>
+                      <Typography variant="h6" fontWeight={600} sx={{ color: "#ffffff", fontSize: "1.1rem" }}>
+                        ขั้นตอนที่ 3: เทมเพลต
+                      </Typography>
                       {/* ปุ่มบันทึก - แสดงเฉพาะเมื่อมีการแก้ไข */}
                       {(() => {
                         const shouldShow = hasUnsavedChanges && groups.length > 0
@@ -2428,7 +3126,7 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
                           gap: 1.5,
                           overflowY: "auto",
                           p: 0.5,
-                          maxHeight: 300, // จำกัดความสูงให้เท่ากับ Step 1
+                          maxHeight: 400,
                         }}>
                           {templates.map((template) => (
                             <Box
@@ -2534,343 +3232,30 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
                     </Box>
                   </CardContent>
                 </Card>
-            </Stack>
-          </Grid>
-        </Grid>
-
-        {/* Step 2: Document with OCR Line Overlay - แสดงเต็มหน้าจอ */}
-        {(ocrResult || imageUrl) && imageFile && (
-          <Grid container spacing={2} sx={{ mt: 2 }}>
-            <Grid size={{ xs: 12 }}>
-              <Card sx={{ boxShadow: "0 4px 12px rgba(0,0,0,0.08)", borderRadius: 2, display: "flex", flexDirection: "column" }}>
-                  <CardContent sx={{ p: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-                    <Box sx={{ 
-                      background: "linear-gradient(135deg, #334155 0%, #475569 100%)",
-                      p: 2,
-                      borderTopLeftRadius: 8,
-                      borderTopRightRadius: 8,
-                    }}>
-                      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2 }}>
-                        <Typography variant="h6" fontWeight={600} sx={{ color: "#ffffff", fontSize: "1.1rem" }}>
-                          ขั้นตอนที่ 2: เลือกข้อความ (ลากเพื่อสร้างกลุ่ม)
-                        </Typography>
-                        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flex: 1, justifyContent: "flex-end" }}>
-                          {lines.length > 0 ? (
-                            <>
-                              <Chip label={`${lines.length} lines`} size="small" />
-                              {groups.length > 0 && (
-                                <Chip label={`${groups.length} group${groups.length !== 1 ? "s" : ""}`} color="primary" />
-                              )}
-                            </>
-                          ) : ocrResult ? (
-                            <Chip 
-                              label={`${ocrResult.words?.length || 0} words found`} 
-                              size="small" 
-                              color={ocrResult.words?.length > 0 ? "default" : "warning"} 
-                            />
-                          ) : (
-                            <Chip 
-                              label="Preview ready" 
-                              size="small" 
-                              color="info" 
-                            />
-                          )}
-                        </Box>
-                      </Box>
-                    </Box>
-                    <Stack spacing={1.5} sx={{ p: 2, flex: 1, display: "flex", flexDirection: "column" }}>
-                      {ocrResult && (!ocrResult.words || ocrResult.words.length === 0) && (
-                        <Alert severity="warning">
-                          No words detected in this document. Please try a different image or check if the document is readable.
-                        </Alert>
-                      )}
-
-                      {ocrResult && ocrResult.words && ocrResult.words.length > 0 && lines.length === 0 && (
-                        <Alert severity="info">
-                          Words detected but could not be merged into lines. Please check the OCR result.
-                        </Alert>
-                      )}
-
-                      {!ocrResult && imageUrl && (
-                        <Alert severity="info">
-                          First page preview displayed. Click "Run OCR v2" to scan the document.
-                        </Alert>
-                      )}
-
-                      <Box
-                        ref={containerRef}
-                        sx={{
-                          position: "relative",
-                          border: "2px solid #e2e8f0",
-                          borderRadius: 2,
-                          overflow: "hidden",
-                          bgcolor: "#ffffff",
-                          display: "inline-block",
-                          width: "100%",
-                          flex: 1,
-                          minHeight: 400,
-                          userSelect: "none", // Prevent text selection
-                        }}
-                      >
-                        {/* Layer 1: Document Image - pointer-events: none */}
-                        {extractingPdf ? (
-                          <Box
-                            sx={{
-                              width: "100%",
-                              minHeight: 400,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              bgcolor: "#f8fafc",
-                            }}
-                          >
-                            <Stack spacing={2} alignItems="center">
-                              <CircularProgress />
-                              <Typography variant="body2" color="text.secondary">
-                                Extracting first page from PDF...
-                              </Typography>
-                            </Stack>
-                          </Box>
-                        ) : imageUrl ? (
-                          <img
-                            ref={imageRef}
-                            src={imageUrl}
-                            alt={ocrResult?.fileName || imageFile?.name || "Document"}
-                            draggable={false}
-                            style={{
-                              width: "100%",
-                              height: "auto",
-                              display: "block",
-                              maxWidth: "100%",
-                              pointerEvents: "none", // Disable image dragging
-                              userSelect: "none",
-                              // If using normalized image from Firebase, no CSS transform needed
-                              // Otherwise, apply CSS transform to match rotation value
-                              ...(ocrResult?.normalizedImageBase64 ? {} : {
-                                transform: `rotate(${imageRotation}deg)`,
-                                transformOrigin: "center center",
-                              }),
-                            }}
-                            onLoad={() => {
-                              if (ocrResult?.normalizedImageBase64) {
-                                console.log(`🖼️ [Image Load] Normalized image from Firebase loaded (no rotation needed)`)
-                              } else {
-                                console.log(`🖼️ [Image Load] Image loaded with rotation: ${imageRotation}°`)
-                                console.log(`🖼️ [Image Load] CSS transform: rotate(${imageRotation}deg)`)
-                              }
-                            }}
-                          />
-                        ) : null}
-
-                        {/* Layer 2: OCR Word Overlay - Visual only, pointer-events: none */}
-                        {/* Show merged words (connected words as single units) */}
-                        {displaySize && mergedWords && mergedWords.length > 0 && (
-                          <Box
-                            sx={{
-                              position: "absolute",
-                              top: 0,
-                              left: 0,
-                              width: "100%",
-                              height: "100%",
-                              pointerEvents: "none",
-                              zIndex: 1,
-                            }}
-                          >
-                            <OCRWordLayer
-                              words={mergedWords}
-                              scaleX={scaleX}
-                              scaleY={scaleY}
-                              selectedWordIndices={new Set()} // Words are selected via drag, not click
-                            />
-                          </Box>
-                        )}
-
-                        {/* Layer 2b: Group Display - Interactive layer for group selection/drag/resize */}
-                        {displaySize && groups.length > 0 && (
-                          <GroupSelectionLayer
-                            groups={groups}
-                            scaleX={scaleX}
-                            scaleY={scaleY}
-                            isSelecting={isSelecting}
-                            selectionBox={selectionBox}
-                            selectedGroupId={selectedGroupId}
-                            onGroupClick={handleGroupClick}
-                            onGroupDragStart={handleGroupDragStart}
-                            onGroupResizeStart={handleGroupResizeStart}
-                            onGroupDelete={handleGroupDelete}
-                          />
-                        )}
-
-                        {/* Layer 3: Interaction Layer - Handles selection box (always available, but lower z-index than groups) */}
-                        {displaySize && (
-                          <InteractionLayer
-                            onMouseDown={(e) => {
-                              // Don't start selection if dragging or resizing a group
-                              if (isDraggingGroup || isResizingGroup) {
-                                console.log("⚠️ [InteractionLayer] Ignoring mousedown - dragging/resizing group")
-                                return
-                              }
-
-                              // Check if clicking on a group - if yes, let GroupSelectionLayer handle it
-                              const rect = containerRef.current?.getBoundingClientRect()
-                              if (rect) {
-                                const x = (e.clientX - rect.left) / scaleX
-                                const y = (e.clientY - rect.top) / scaleY
-                                const clickedGroup = groups.find((g) => {
-                                  return x >= g.x && x <= g.x + g.w && y >= g.y && y <= g.y + g.h
-                                })
-                                if (clickedGroup) {
-                                  // Clicked on a group - let GroupSelectionLayer handle it via its own onClick
-                                  // Don't prevent default - let the event bubble to GroupSelectionLayer
-                                  console.log(`🖱️ [InteractionLayer] Clicked on group ${clickedGroup.id} - letting GroupSelectionLayer handle`)
-                                  return // Don't start selection
-                                } else {
-                                  // Clicked outside groups - deselect and start new selection
-                                  // This allows creating unlimited groups
-                                  console.log(`🖱️ [InteractionLayer] Clicked outside groups - starting new selection`)
-                                  if (selectedGroupId) {
-                                    console.log(`🖱️ [Group] Deselecting group ${selectedGroupId} to allow new selection`)
-                                    setSelectedGroupId(null)
-                                  }
-                                  // Reset any drag/resize state to ensure clean start for new selection
-                                  if (isDraggingGroup || isResizingGroup) {
-                                    setIsDraggingGroup(false)
-                                    setIsResizingGroup(false)
-                                    setDragStart(null)
-                                    setResizeHandle(null)
-                                  }
-                                  handleMouseDown(e)
-                                }
-                              } else {
-                                // No rect - deselect and start selection
-                                if (selectedGroupId) {
-                                  setSelectedGroupId(null)
-                                }
-                                handleMouseDown(e)
-                              }
-                            }}
-                            onMouseMove={(e) => {
-                              // Only handle mouse move if not dragging/resizing group
-                              if (!isDraggingGroup && !isResizingGroup) {
-                                handleMouseMove(e)
-                              }
-                            }}
-                            onMouseUp={(e) => {
-                              // Only handle mouse up if not dragging/resizing group
-                              if (!isDraggingGroup && !isResizingGroup) {
-                                handleMouseUp(e)
-                              }
-                            }}
-                            onMouseLeave={(e) => {
-                              // Only handle mouse leave if not dragging/resizing group
-                              if (!isDraggingGroup && !isResizingGroup) {
-                                handleMouseUp(e)
-                              }
-                            }}
-                            isSelecting={isSelecting}
-                            selectionBox={selectionBox}
-                            scaleX={scaleX}
-                            scaleY={scaleY}
-                          />
-                        )}
-                        
-                        {/* Layer 4: Global mouse move/up for group drag/resize (when group is selected) */}
-                        {/* This layer captures mouse events during drag/resize, but allows clicks on UI elements */}
-                        {displaySize && (isDraggingGroup || isResizingGroup) && (
-                          <Box
-                            sx={{
-                              position: "fixed", // Use fixed to capture events outside container
-                              top: 0,
-                              left: 0,
-                              width: "100vw",
-                              height: "100vh",
-                              pointerEvents: "auto", // Must be auto to receive events
-                              zIndex: 9999, // Very high to capture all events
-                              bgcolor: "transparent",
-                            }}
-                            onMouseMove={(e) => {
-                              // Don't prevent default - allow other handlers to work
-                              // Only handle if still dragging/resizing
-                              if (isDraggingGroup || isResizingGroup) {
-                                handleGroupMouseMove(e)
-                              }
-                            }}
-                            onMouseUp={(e) => {
-                              // Check if clicking on a button or UI element - if yes, don't prevent
-                              const target = e.target
-                              const isUIElement = target.closest('button') || 
-                                                  target.closest('[role="button"]') ||
-                                                  target.closest('.MuiButton-root') ||
-                                                  target.closest('.MuiIconButton-root')
-                              
-                              if (!isUIElement) {
-                                // Only prevent if not clicking on UI element
-                                e.preventDefault()
-                                e.stopPropagation()
-                              }
-                              
-                              // Always handle mouse up to end drag/resize
-                              if (isDraggingGroup || isResizingGroup) {
-                                handleGroupMouseUp()
-                              }
-                            }}
-                            onMouseLeave={(e) => {
-                              // Only handle if still dragging/resizing
-                              if (isDraggingGroup || isResizingGroup) {
-                                handleGroupMouseUp()
-                              }
-                            }}
-                            onClick={(e) => {
-                              // Allow clicks on UI elements to pass through
-                              const target = e.target
-                              const isUIElement = target.closest('button') || 
-                                                  target.closest('[role="button"]') ||
-                                                  target.closest('.MuiButton-root') ||
-                                                  target.closest('.MuiIconButton-root')
-                              
-                              if (isUIElement) {
-                                // Don't prevent clicks on UI elements
-                                return
-                              }
-                              
-                              // For other clicks, prevent to avoid triggering unwanted actions
-                              e.preventDefault()
-                              e.stopPropagation()
-                            }}
-                          >
-                          </Box>
-                        )}
-                      </Box>
-                    </Stack>
-                  </CardContent>
-                </Card>
+              </Stack>
             </Grid>
           </Grid>
-        )}
 
-        {/* Groups & Preview - Below Step 1 */}
-        {ocrResult && (
+          {/* Step 4: Groups & Preview Table */}
           <Grid container spacing={2} sx={{ mt: 2 }}>
             {/* Groups Column */}
-            <Grid size={{ xs: 12, lg: 4 }}>
-              <Stack spacing={2} sx={{ height: "100%" }}>
-                <Card sx={{ 
-                  display: "flex", 
-                  flexDirection: "column", 
-                  height: "calc(100vh - 200px)",
-                  minHeight: "500px",
-                  maxHeight: "calc(100vh - 200px)",
-                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-                  borderRadius: 2,
-                }}>
-                  <CardContent sx={{ 
-                    flex: 1, 
-                    display: "flex", 
-                    flexDirection: "column", 
-                    overflow: "hidden", 
+            <Grid size={{ xs: 12, md: 4 }}>
+              <Card sx={{ 
+                boxShadow: "0 4px 12px rgba(0,0,0,0.08)", 
+                borderRadius: 2,
+              }}>
+                <CardContent sx={{ p: 0 }}>
+                  <Box sx={{ 
+                    background: "linear-gradient(135deg, #334155 0%, #475569 100%)",
                     p: 2,
-                    minHeight: 0,
+                    borderTopLeftRadius: 8,
+                    borderTopRightRadius: 8,
                   }}>
+                    <Typography variant="h6" fontWeight={600} sx={{ color: "#ffffff", fontSize: "1.1rem" }}>
+                      ขั้นตอนที่ 4: กลุ่มและคอลัมน์
+                    </Typography>
+                  </Box>
+                  <Box sx={{ p: 2 }}>
                     <GroupMappingPanel
                       groups={groups}
                       ocrResult={ocrResult}
@@ -2879,52 +3264,38 @@ export default function DocumentTemplateSettings({ credits, onConsume }) {
                       onGroupReorder={handleGroupReorder}
                       onGroupAdd={handleGroupAdd}
                     />
-                  </CardContent>
-                </Card>
-              </Stack>
+                  </Box>
+                </CardContent>
+              </Card>
             </Grid>
 
-            {/* Preview Column - กว้างเท่ากับ step 2 */}
-            <Grid size={{ xs: 12, lg: 8 }}>
-              <Stack spacing={2} sx={{ height: "100%" }}>
-                {groups.length > 0 && (
-                  <Card sx={{ 
-                    display: "flex", 
-                    flexDirection: "column", 
-                    height: "calc(100vh - 200px)",
-                    minHeight: "500px",
-                    maxHeight: "calc(100vh - 200px)",
-                    boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-                    borderRadius: 2,
-                  }}>
-                    <CardContent sx={{ 
-                      p: 0,
-                      flex: 1, 
-                      display: "flex", 
-                      flexDirection: "column", 
-                      overflow: "hidden",
+            {/* Preview Column */}
+            <Grid size={{ xs: 12, md: 8 }}>
+              {groups.length > 0 && (
+                <Card sx={{ 
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)", 
+                  borderRadius: 2,
+                }}>
+                  <CardContent sx={{ p: 0 }}>
+                    <Box sx={{ 
+                      background: "linear-gradient(135deg, #334155 0%, #475569 100%)",
+                      p: 2,
+                      borderTopLeftRadius: 8,
+                      borderTopRightRadius: 8,
                     }}>
-                      <Box sx={{ 
-                        background: "linear-gradient(135deg, #334155 0%, #475569 100%)",
-                        p: 2,
-                        borderTopLeftRadius: 8,
-                        borderTopRightRadius: 8,
-                      }}>
-                        <Typography variant="h6" fontWeight={600} sx={{ color: "#ffffff", fontSize: "1.1rem" }}>
-                          ตัวอย่างข้อมูล
-                        </Typography>
-                      </Box>
-                      <Box sx={{ p: 2, flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
-                        <Box sx={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-                          <PreviewTable ocrResult={ocrResult} groups={groups} />
-                        </Box>
-                      </Box>
-                    </CardContent>
-                  </Card>
-                )}
-              </Stack>
+                      <Typography variant="h6" fontWeight={600} sx={{ color: "#ffffff", fontSize: "1.1rem" }}>
+                        ตัวอย่างข้อมูล
+                      </Typography>
+                    </Box>
+                    <Box sx={{ p: 2 }}>
+                      <PreviewTable ocrResult={ocrResult} groups={groups} />
+                    </Box>
+                  </CardContent>
+                </Card>
+              )}
             </Grid>
           </Grid>
+          </Box>
         )}
       </Box>
 

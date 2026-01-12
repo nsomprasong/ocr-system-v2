@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { onAuthStateChanged, signOut } from "firebase/auth"
+import { Box } from "@mui/material"
 
 import { auth } from "./firebase"
 import {
@@ -191,8 +192,42 @@ export default function App() {
   // 📄 Page router - V2 ONLY
   let content = null
 
-  // Default to Document Template Settings
-  if (page === "template-settings" || page === "home" || !page) {
+  // Default to Home page with logo
+  if (page === "home" || !page) {
+    content = (
+      <Box
+        sx={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "linear-gradient(135deg, #2d2d2d 0%, #3d3d3d 50%, #2f2f2f 100%)",
+        }}
+      >
+        <Box
+          component="img"
+          src="/Logo.png"
+          alt="GOLDEN SOFT Logo"
+          onError={(e) => {
+            console.error("❌ Logo failed to load:", e.target.src)
+            if (e.target.src.includes("Logo.png")) {
+              e.target.src = "/logo.png"
+            } else if (e.target.src.includes("logo.png")) {
+              e.target.src = "/Logo.PNG"
+            }
+          }}
+          sx={{
+            height: { xs: 300, sm: 400, md: 500 },
+            width: "auto",
+            maxWidth: { xs: "80%", sm: "70%", md: "60%" },
+            objectFit: "contain",
+          }}
+        />
+      </Box>
+    )
+  }
+
+  if (page === "template-settings") {
     content = (
       <DocumentTemplateSettings
         credits={credits}

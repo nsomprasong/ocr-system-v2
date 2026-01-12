@@ -126,25 +126,34 @@ function extractFromGroups(
   for (const group of mappedGroups) {
     if (!group.text || !group.excelColumn) continue
     
-    // Split text by newlines - each line is one row
-    const lines = removeEmptyLines(group.text).split("\n").filter(l => l.trim())
+    // IMPORTANT: Replace \n in token text with space to prevent unwanted line breaks
+    // \n in token text (from OCR) should not create new rows
+    // We'll use Y position to determine rows instead of relying on \n in text
+    const cleanedText = group.text.replace(/\n/g, " ").trim()
     
     // Get Y positions from group's words/lines to determine row order
     const words = group.words || group.lines || []
     
     if (words.length > 0) {
-      // Group words by Y-axis to match with text lines
+      // Group words by Y-axis to determine rows (based on actual Y position, not \n in text)
       const wordRows = groupWordsByY(words, yTolerance)
       
-      // Match text lines with word rows by index
+      // For each word row, extract text from words in that row
+      // This ensures rows are determined by Y position, not by \n in text
       const columnRows: Array<{ y: number; text: string; index: number }> = []
-      for (let i = 0; i < Math.max(lines.length, wordRows.length); i++) {
-        const text = lines[i] || ""
+      for (let i = 0; i < wordRows.length; i++) {
         const wordRow = wordRows[i]
         
+        // Extract text from words in this row (replace \n with space in each word)
+        const rowText = wordRow.words
+          .map(w => (w.text || "").replace(/\n/g, " "))
+          .filter(t => t.trim())
+          .join(" ")
+          .trim()
+        
         // Calculate average Y position from all words in the row
-        let avgY = wordRow?.y || (group.y || 0) + i * 20
-        if (wordRow && wordRow.words && wordRow.words.length > 0) {
+        let avgY = wordRow.y
+        if (wordRow.words && wordRow.words.length > 0) {
           const wordYs = wordRow.words.map(w => w.y || 0).filter(y => y > 0)
           if (wordYs.length > 0) {
             avgY = wordYs.reduce((sum, y) => sum + y, 0) / wordYs.length
@@ -153,20 +162,31 @@ function extractFromGroups(
         
         columnRows.push({
           y: avgY,
-          text: text.trim(),
+          text: rowText,
           index: i,
+        })
+      }
+      
+      // If no word rows but we have cleaned text, use the entire text as one row
+      if (columnRows.length === 0 && cleanedText) {
+        columnRows.push({
+          y: group.y || 0,
+          text: cleanedText,
+          index: 0,
         })
       }
       
       groupRows.set(group.excelColumn, columnRows)
     } else {
-      // No words - use group Y position and assume lines are vertical
-      const columnRows = lines.map((text, i) => ({
-        y: (group.y || 0) + i * 20,
-        text: text.trim(),
-        index: i,
-      }))
-      groupRows.set(group.excelColumn, columnRows)
+      // No words - use group Y position and treat entire text as one row
+      if (cleanedText) {
+        const columnRows = [{
+          y: group.y || 0,
+          text: cleanedText,
+          index: 0,
+        }]
+        groupRows.set(group.excelColumn, columnRows)
+      }
     }
   }
 

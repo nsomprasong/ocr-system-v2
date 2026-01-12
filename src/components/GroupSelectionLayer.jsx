@@ -137,7 +137,7 @@ export default function GroupSelectionLayer({
                     onClick={(e) => {
                       e.preventDefault()
                       e.stopPropagation()
-                      if (onGroupDelete && window.confirm("คุณต้องการลบ group นี้หรือไม่?")) {
+                      if (onGroupDelete) {
                         onGroupDelete(group.id)
                       }
                     }}

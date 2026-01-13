@@ -202,6 +202,145 @@ export async function createUserProfile(user) {
   }
 }
 
+// หักเครดิตจาก Firebase โดยตรง (ดึงค่าจาก Firebase ก่อนหัก)
+export async function deductCreditsFromFirebase(uid, pagesToDeduct) {
+  const ref = doc(db, "users", uid)
+  const maxRetries = 2
+  let lastError = null
+  
+  console.log(`💳 Starting credit deduction: uid=${uid}, pagesToDeduct=${pagesToDeduct}`)
+  console.log(`📡 Firestore instance:`, db)
+  console.log(`📄 Document reference:`, ref.path)
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Enable network ก่อนทุกครั้ง
+      console.log(`🔌 Enabling network (attempt ${attempt})...`)
+      try {
+        await enableNetwork(db)
+        console.log(`✅ Network enabled`)
+      } catch (networkError) {
+        console.warn(`⚠️ Network enable warning:`, networkError.message)
+      }
+      
+      // ดึงเครดิตปัจจุบันจาก Firebase
+      console.log(`📥 Fetching current credits from Firebase...`)
+      const currentSnap = await Promise.race([
+        getDoc(ref),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error("getDoc timeout: เกิน 5 วินาที")), 5000)
+        )
+      ])
+      
+      if (!currentSnap.exists()) {
+        throw new Error("ไม่พบข้อมูลผู้ใช้ใน Firebase")
+      }
+      
+      const currentData = currentSnap.data()
+      const currentCredits = currentData.credits || 0
+      
+      console.log(`✅ Current credits from Firebase: ${currentCredits}`)
+      
+      // ตรวจสอบว่าเครดิตพอหรือไม่
+      if (currentCredits < pagesToDeduct) {
+        throw new Error(`เครดิตไม่เพียงพอ: ต้องการ ${pagesToDeduct} หน้า แต่มีเพียง ${currentCredits} หน้า`)
+      }
+      
+      // หักเครดิต
+      const newCredits = currentCredits - pagesToDeduct
+      console.log(`💳 Deducting credits: ${currentCredits} - ${pagesToDeduct} = ${newCredits}`)
+      
+      // บันทึกกลับทันที
+      const updateData = {
+        credits: newCredits,
+        updatedAt: serverTimestamp(),
+      }
+      
+      console.log(`💾 Saving updated credits to Firebase: ${newCredits}`)
+      
+      await Promise.race([
+        setDoc(ref, updateData, { merge: true }),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error("setDoc timeout: เกิน 15 วินาที")), 15000)
+        )
+      ])
+      
+      console.log(`✅ Credits deducted successfully: ${newCredits} remaining`)
+      
+      // ตรวจสอบว่า update สำเร็จจริงๆ
+      try {
+        const verifySnap = await Promise.race([
+          getDoc(ref),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("getDoc timeout")), 5000))
+        ])
+        if (verifySnap.exists()) {
+          const actualCredits = verifySnap.data().credits
+          console.log(`✅ Verified: Credits in Firestore = ${actualCredits}`)
+          if (actualCredits !== newCredits) {
+            console.warn(`⚠️ Credit mismatch: expected ${newCredits}, got ${actualCredits}`)
+          }
+        }
+      } catch (verifyError) {
+        console.warn(`⚠️ Could not verify update:`, verifyError.message)
+      }
+      
+      // Return ทั้งยอดเดิมและยอดใหม่
+      return {
+        previousCredits: currentCredits,
+        newCredits: newCredits,
+        deducted: pagesToDeduct
+      }
+      
+    } catch (error) {
+      console.error(`❌ Error deducting credits (attempt ${attempt}/${maxRetries}):`, error)
+      console.error(`❌ Error details:`, {
+        code: error.code,
+        message: error.message,
+        stack: error.stack
+      })
+      
+      // ตรวจสอบ error code
+      if (error.code === "permission-denied") {
+        throw new Error("ไม่มีสิทธิ์ในการหักเครดิต กรุณาตรวจสอบ Firestore Rules ใน Firebase Console")
+      } else if (error.code === "not-found") {
+        throw new Error("Firestore database ไม่พบ กรุณาตรวจสอบว่าได้สร้าง Firestore database แล้วใน Firebase Console")
+      } else if (error.code === "unavailable") {
+        console.warn("⚠️ Firestore is unavailable - may be offline")
+      } else if (error.code === "failed-precondition") {
+        throw new Error("Firestore database ยังไม่ได้ถูกสร้าง กรุณาไปที่ Firebase Console และสร้าง Firestore database")
+      }
+      
+      // ถ้าเป็น error เกี่ยวกับเครดิตไม่พอ ไม่ต้อง retry
+      if (error.message?.includes("เครดิตไม่เพียงพอ")) {
+        throw error
+      }
+      
+      lastError = error
+      
+      // ถ้าไม่ใช่ attempt สุดท้าย ให้ retry
+      if (attempt < maxRetries) {
+        const waitTime = 3000
+        console.log(`⏳ Waiting ${waitTime}ms before retry...`)
+        await new Promise(resolve => setTimeout(resolve, waitTime))
+      }
+    }
+  }
+  
+  // ถ้าทุก attempt ล้มเหลว
+  console.error("❌ All attempts failed to deduct credits")
+  let errorMsg = `ไม่สามารถหักเครดิตได้: ${lastError?.message || "Unknown error"}`
+  
+  if (lastError?.code === "permission-denied") {
+    errorMsg = "ไม่มีสิทธิ์ในการหักเครดิต กรุณาตรวจสอบ Firestore Rules ใน Firebase Console"
+  } else if (lastError?.code === "not-found" || lastError?.code === "failed-precondition") {
+    errorMsg = "Firestore database ไม่พบหรือยังไม่ได้ถูกสร้าง กรุณาไปที่ Firebase Console และสร้าง Firestore database"
+  } else if (lastError?.message?.includes("timeout")) {
+    errorMsg = `การเชื่อมต่อ Firestore timeout: ${lastError.message}. กรุณาตรวจสอบ network connection และ Firestore database`
+  }
+  
+  throw new Error(errorMsg)
+}
+
 // อัปเดตเครดิต
 export async function updateUserCredits(uid, newCredits) {
   const ref = doc(db, "users", uid)

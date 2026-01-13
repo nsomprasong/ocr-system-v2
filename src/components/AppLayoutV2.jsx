@@ -8,7 +8,7 @@ export default function AppLayoutV2({ children, page, onNavigate, onLogout, cred
   return (
     <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: "#f8fafc" }}>
       <CssBaseline />
-      <Sidebar page={page} onNavigate={onNavigate} onLogout={onLogout} />
+      <Sidebar page={page} onNavigate={onNavigate} onLogout={onLogout} credits={credits} />
       <Box sx={{ flexGrow: 1, ml: "240px" }}>
         {children}
       </Box>

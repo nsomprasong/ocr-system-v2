@@ -179,6 +179,42 @@ export default function App() {
     return () => unsubscribe()
   }, [])
 
+  // อัปเดตยอดเครดิตจาก Firebase ทุก 5 วินาที
+  useEffect(() => {
+    if (!user) {
+      return
+    }
+
+    const updateCredits = async () => {
+      try {
+        const profile = await Promise.race([
+          getUserProfile(user.uid),
+          new Promise((resolve) => setTimeout(() => resolve(null), 3000))
+        ])
+        
+        if (profile && profile.credits !== undefined) {
+          setCredits(profile.credits)
+          console.log(`✅ [Credits Update] Updated from Firebase: ${profile.credits} pages`)
+        }
+      } catch (error) {
+        console.warn("⚠️ Could not update credits from Firebase:", error.message)
+        // ไม่เป็นไร - ใช้ค่าปัจจุบันต่อไป
+      }
+    }
+
+    // อัปเดตทันทีครั้งแรก
+    updateCredits()
+
+    // อัปเดตทุก 5 วินาที
+    const interval = setInterval(() => {
+      updateCredits()
+    }, 5000)
+
+    return () => {
+      clearInterval(interval)
+    }
+  }, [user])
+
   // ⏳ Loading
   if (loading) {
     return <div style={{ padding: 40 }}>Loading...</div>
@@ -201,7 +237,7 @@ export default function App() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "linear-gradient(135deg, #2d2d2d 0%, #3d3d3d 50%, #2f2f2f 100%)",
+          background: "linear-gradient(135deg, #f8fafc 0%, #e2e8f0 50%, #f1f5f9 100%)",
         }}
       >
         <Box
@@ -252,7 +288,15 @@ export default function App() {
         setFiles={setScanFiles}
         onNext={() => setPage("template-settings")}
         columnConfig={columnConfig}
-        onConsume={(used) => setCredits((c) => c - used)}
+        onConsume={(used, newCreditsFromFirebase) => {
+          // If newCreditsFromFirebase is provided, use it directly (from Firebase)
+          // Otherwise, deduct from current credits (fallback)
+          if (newCreditsFromFirebase !== undefined) {
+            setCredits(newCreditsFromFirebase)
+          } else {
+            setCredits((c) => c - used)
+          }
+        }}
       />
     )
   }

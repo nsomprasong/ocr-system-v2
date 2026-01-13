@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import {
   Box,
   Card,
@@ -19,6 +19,11 @@ import {
   TextField,
   LinearProgress,
   Divider,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  DialogContentText,
 } from "@mui/material"
 import CloudUploadIcon from "@mui/icons-material/CloudUpload"
 import CloseIcon from "@mui/icons-material/Close"
@@ -26,14 +31,18 @@ import DescriptionIcon from "@mui/icons-material/Description"
 import PictureAsPdfIcon from "@mui/icons-material/PictureAsPdf"
 import ImageIcon from "@mui/icons-material/Image"
 import PlayArrowIcon from "@mui/icons-material/PlayArrow"
+import CancelIcon from "@mui/icons-material/Cancel"
+import WarningIcon from "@mui/icons-material/Warning"
+import { Slide } from "@mui/material"
 import { getPdfPageCount, isPdfFile } from "../services/pdf.service"
 import { auth } from "../firebase"
-import { updateUserCredits, getUserProfile } from "../services/user.service"
+import { updateUserCredits, getUserProfile, deductCreditsFromFirebase } from "../services/user.service"
 // Removed: import { ocrFile } from "../services/ocr.service" - not used, using runOCR (v2) instead
 import { extractDataFromText } from "../services/textProcessor.service"
 import {
   createSeparateExcelFiles,
   createCombinedExcelFile,
+  createExcelFile,
 } from "../services/excel.service"
 import { runOCR } from "../utils/runOCR"
 import { loadTemplates, loadTemplate } from "../../template/loadTemplate"
@@ -175,6 +184,11 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
   const [currentBatch, setCurrentBatch] = useState({ start: 0, end: 0 })
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 })
   const [isScanning, setIsScanning] = useState(false) // Track if scanning is in progress
+  const [showCancelDialog, setShowCancelDialog] = useState(false) // Show cancel confirmation dialog
+  const [cancelRequested, setCancelRequested] = useState(false) // Flag to request cancellation after current file (for UI)
+  const cancelRequestedRef = useRef(false) // Ref to track cancellation in async functions
+  const scanStartTimeRef = useRef(null) // Start time of scanning (use ref for immediate access)
+  const [elapsedTime, setElapsedTime] = useState(0) // Elapsed time in seconds
 
   const handleSelect = async (fileList) => {
     try {
@@ -364,13 +378,50 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
   const totalPages = files.reduce((s, f) => s + f.pageCount, 0)
   const creditEnough = credits >= totalPages
 
+  // Timer effect - update elapsed time every second when scanning
+  useEffect(() => {
+    if (status === "running") {
+      // Set start time if not already set
+      if (!scanStartTimeRef.current) {
+        scanStartTimeRef.current = Date.now()
+      }
+      
+      const interval = setInterval(() => {
+        if (scanStartTimeRef.current) {
+          const elapsed = Math.floor((Date.now() - scanStartTimeRef.current) / 1000)
+          setElapsedTime(elapsed)
+        }
+      }, 1000)
+
+      return () => clearInterval(interval)
+    } else {
+      // Reset timer when not running
+      scanStartTimeRef.current = null
+      setElapsedTime(0)
+    }
+  }, [status])
+
+  // Format elapsed time to HH:MM:SS
+  const formatTime = (seconds) => {
+    const hours = Math.floor(seconds / 3600)
+    const mins = Math.floor((seconds % 3600) / 60)
+    const secs = seconds % 60
+    if (hours > 0) {
+      return `${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+    } else {
+      return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+    }
+  }
+
   /**
    * Scan a single file using batch processing (perPage mode)
    * Processes pages in batches of BATCH_SIZE
    * @param {ScanFileState} fileState
    * @param {Array} queue - Array of ScanFileState objects (for progress calculation)
+   * @param {number} currentCredits - Current user credits
+   * @param {Function} onCreditUpdate - Callback to update credits
    */
-  const scanSingleFile = async (fileState, queue) => {
+  const scanSingleFile = async (fileState, queue, currentCredits, onCreditUpdate) => {
     fileState.status = "scanning"
     setCurrentFile(fileState.originalName)
     
@@ -388,7 +439,35 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
       throw new Error("User not authenticated")
     }
     
+    // Deduct credits for this file BEFORE sending to Firebase
+    // Calculate pages to scan for this file
+    const pagesToDeduct = actualTotalPages
+    
+    // Deduct credits from Firebase directly (fetch current value, deduct, save immediately)
+    console.log(`💳 [BatchScan] Deducting credits from Firebase for ${fileState.originalName}: ${pagesToDeduct} pages`)
+    setCurrentFile(`กำลังหักเครดิต: ${fileState.originalName}...`)
+    
+    let creditResult
+    try {
+      // ดึงเครดิตจาก Firebase, หัก, และบันทึกกลับทันที
+      creditResult = await deductCreditsFromFirebase(user.uid, pagesToDeduct)
+      console.log(`✅ [BatchScan] Credits deducted successfully: ${creditResult.previousCredits} -> ${creditResult.newCredits} (${creditResult.deducted} pages)`)
+      
+      // Update credits in parent component with actual value from Firebase
+      if (onCreditUpdate) {
+        onCreditUpdate(creditResult.deducted, creditResult.newCredits)
+      }
+    } catch (creditError) {
+      console.error(`❌ [BatchScan] Failed to deduct credits:`, creditError)
+      throw new Error(`ไม่สามารถหักเครดิตได้: ${creditError.message}`)
+    }
+    
+    // Use the new credits from Firebase for next file
+    const updatedCredits = creditResult.newCredits
+    
     // Process pages in batches (only scan pages in pagesToScan)
+    // Now proceed with scanning after credits are deducted
+    // Note: We continue scanning even if cancel is requested, to finish current file
     for (let i = 0; i < pagesToScan.length; i += BATCH_SIZE) {
       const batchPages = pagesToScan.slice(i, i + BATCH_SIZE)
       const startPage = batchPages[0]
@@ -548,14 +627,85 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
   }
 
   /**
+   * Export single file immediately after scan completion
+   * @param {string} filename - Original filename
+   * @param {Array} data - Extracted data rows
+   * @returns {Promise<void>} Promise that resolves when download is complete
+   */
+  const exportSingleFile = async (filename, data) => {
+    const configToUse = selectedTemplateConfig || columnConfig || []
+    
+    if (fileType === "xlsx") {
+      if (mode === "separate") {
+        // Export immediately as separate file
+        const baseName = filename.replace(/\.[^/.]+$/, "")
+        console.log(`💾 [BatchScan] Starting export: ${baseName}.xlsx`)
+        
+        // Trigger download
+        createExcelFile(data, configToUse, `${baseName}.xlsx`)
+        
+        // Wait for browser to process the download (give it time to start)
+        // This ensures the download dialog appears and browser processes it
+        await new Promise((resolve) => {
+          // Use requestAnimationFrame to ensure browser has processed the download trigger
+          requestAnimationFrame(() => {
+            // Additional delay to ensure download starts
+            setTimeout(() => {
+              console.log(`✅ [BatchScan] Download initiated for: ${baseName}.xlsx`)
+              resolve()
+            }, 300) // 300ms should be enough for browser to start download
+          })
+        })
+        
+        console.log(`✅ [BatchScan] Export completed: ${baseName}.xlsx`)
+      } else {
+        // For combine mode, we'll collect all files and export at the end
+        // This function won't be called in combine mode
+      }
+    } else {
+      console.warn(`⚠️ [BatchScan] Word export not supported for single file export`)
+    }
+  }
+
+  /**
+   * Handle cancel scan request
+   */
+  const handleCancelScan = () => {
+    setShowCancelDialog(true)
+  }
+
+  /**
+   * Confirm cancel - finish current file then stop
+   */
+  const handleConfirmCancel = () => {
+    setShowCancelDialog(false)
+    setCancelRequested(true)
+    cancelRequestedRef.current = true // Set ref immediately for async functions
+    console.log(`⚠️ [BatchScan] Cancel requested - will finish current file then stop`)
+  }
+
+  /**
+   * Cancel the cancel request
+   */
+  const handleCancelCancel = () => {
+    setShowCancelDialog(false)
+  }
+
+  /**
    * Run scan queue - process all files with batch scanning
    * @param {Array} queue - Array of ScanFileState objects
+   * @param {number} initialCredits - Initial user credits
+   * @param {Function} onCreditUpdate - Callback to update credits
    */
-  const runScanQueue = async (queue) => {
+  const runScanQueue = async (queue, initialCredits, onCreditUpdate) => {
     if (!queue || queue.length === 0) {
       console.warn(`⚠️ [BatchScan] Scan queue is empty`)
       return
     }
+    
+    // Reset cancel flag (both state and ref)
+    setCancelRequested(false)
+    cancelRequestedRef.current = false
     
     // Update state for UI
     setScanQueue(queue)
@@ -564,13 +714,26 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
     setProgress(0)
     setError("")
     setCurrentFile("กำลังเริ่มต้น...")
+    scanStartTimeRef.current = Date.now() // Start timer
+    setElapsedTime(0) // Reset elapsed time
     
-    const fileData = []
+    const fileData = [] // For combine mode - collect all files
+    const combinedData = [] // For combine mode - collect all data rows
+    
+    // Track current credits (updated after each file)
+    let currentCredits = initialCredits
     
     try {
       // Process each file (use queue parameter, not scanQueue state)
       let processedCount = 0
       for (let i = 0; i < queue.length; i++) {
+        // Check if cancel was requested - if so, finish current file then stop
+        if (cancelRequestedRef.current) {
+          console.log(`⚠️ [BatchScan] Cancel requested - stopping after current file`)
+          // Don't process remaining files
+          break
+        }
+        
         const fileState = queue[i]
         
         // Skip if file was removed from files list
@@ -586,7 +749,33 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
         console.log(`📄 [BatchScan] Processing file ${processedCount}/${queue.length}: ${fileState.originalName}`)
         
         try {
-          await scanSingleFile(fileState, queue)
+          // Calculate pages to scan for this file
+          const pagesToScan = fileState.pagesToScan || Array.from({ length: fileState.totalPages }, (_, i) => i + 1)
+          const pagesToDeduct = pagesToScan.length
+          
+          // Note: Credit check will be done inside scanSingleFile by fetching from Firebase
+          // We don't check here because credits might have changed from other devices
+          
+          // Scan file (credits will be deducted inside scanSingleFile by fetching from Firebase first)
+          await scanSingleFile(fileState, queue, currentCredits, (deducted, newCreditsFromFirebase) => {
+            // Update current credits with actual value from Firebase
+            if (newCreditsFromFirebase !== undefined) {
+              currentCredits = newCreditsFromFirebase
+            } else {
+              // Fallback: deduct from current (should not happen)
+              currentCredits = currentCredits - deducted
+            }
+            if (onCreditUpdate) {
+              // Pass both deducted amount and new credits
+              if (newCreditsFromFirebase !== undefined) {
+                onCreditUpdate(deducted, newCreditsFromFirebase)
+              } else {
+                onCreditUpdate(deducted)
+              }
+            }
+          })
+          
+          // Credits already deducted in scanSingleFile via callback above
           
           // Verify that all pages have been processed
           const expectedPages = fileState.pagesToScan ? fileState.pagesToScan.length : fileState.totalPages
@@ -682,17 +871,45 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
                 return newRow
               })
               
-              fileData.push({
-                filename: fileState.originalName,
-                data,
-              })
-              console.log(`✅ [BatchScan] Added ${data.length} rows to fileData for ${fileState.originalName}`)
+              // Export immediately if mode is "separate"
+              if (mode === "separate") {
+                console.log(`💾 [BatchScan] Exporting file immediately: ${fileState.originalName}`)
+                setCurrentFile(`กำลังดาวน์โหลดไฟล์: ${fileState.originalName}...`)
+                setProgress(Math.min(90, 10 + (processedCount / queue.length) * 80))
+                
+                // Export single file immediately and wait for download to complete
+                await exportSingleFile(fileState.originalName, data)
+                
+                console.log(`✅ [BatchScan] File exported and download completed: ${fileState.originalName}`)
+                
+                // Small delay to ensure download dialog is processed
+                await new Promise((resolve) => setTimeout(resolve, 200))
+              } else {
+                // For combine mode, collect data for later export
+                fileData.push({
+                  filename: fileState.originalName,
+                  data,
+                })
+                combinedData.push(...data)
+                console.log(`✅ [BatchScan] Added ${data.length} rows to combined data for ${fileState.originalName}`)
+              }
             }
           }
           
-          // Remove completed file from files list
+          // Remove completed file from files list (always remove completed files)
           setFiles((prev) => prev.filter((fileItem) => fileItem.file !== fileState.file))
           console.log(`✅ [BatchScan] Removed completed file from list: ${fileState.originalName}`)
+          
+          // Check if cancel was requested after finishing current file
+          // If cancelled, stop scanning but keep remaining files (not scanned yet) in the list
+          if (cancelRequestedRef.current) {
+            console.log(`⚠️ [BatchScan] Cancel requested - current file finished, stopping scan`)
+            console.log(`📋 [BatchScan] Completed file removed, remaining files kept in list`)
+            setCurrentFile(`ยกเลิกการสแกน - ไฟล์ ${fileState.originalName} เสร็จแล้ว`)
+            setCancelRequested(true) // Update state for UI
+            // Stop scanning, but remaining files (not scanned) are still in the list
+            break
+          }
         } catch (fileError) {
           console.error(`❌ [BatchScan] Error processing file ${fileState.originalName}:`, fileError)
           fileState.status = "error"
@@ -704,52 +921,81 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
         }
       }
       
-      // Export Excel files (only after all files are processed)
-      if (fileData.length > 0) {
-        const totalRows = fileData.reduce((sum, f) => sum + f.data.length, 0)
-        console.log(`💾 [BatchScan] All files processed. Downloading ${fileData.length} file(s) with ${totalRows} total rows...`)
-        setCurrentFile("กำลังดาวน์โหลดไฟล์...")
+      // Export combined file (only for combine mode, after all files are processed)
+      // Only export if not cancelled
+      if (!cancelRequestedRef.current && mode === "combine" && combinedData.length > 0) {
+        const totalRows = combinedData.length
+        console.log(`💾 [BatchScan] All files processed. Downloading combined file with ${totalRows} total rows...`)
+        setCurrentFile("กำลังดาวน์โหลดไฟล์รวม...")
         setProgress(95)
         
         const configToUse = selectedTemplateConfig || columnConfig || []
         
         if (fileType === "xlsx") {
-          if (mode === "separate") {
-            createSeparateExcelFiles(fileData, configToUse)
-          } else {
-            createCombinedExcelFile(fileData, configToUse, "combined.xlsx")
-          }
+          createCombinedExcelFile(fileData, configToUse, "combined.xlsx")
         } else {
-          setError("ไฟล์ Word ต้องใช้ Backend API เท่านั้น กรุณาเปลี่ยนเป็น Excel")
-          setStatus("idle")
-          setIsScanning(false)
-          return
+      setError("ไฟล์ Word ต้องใช้ Backend API เท่านั้น กรุณาเปลี่ยนเป็น Excel")
+      setStatus("idle")
+      setIsScanning(false)
+      setScanStartTime(null) // Stop timer
+      setElapsedTime(0) // Reset timer
+      return
         }
       }
       
-      setStatus("success")
-      setProgress(100)
-      setIsScanning(false) // Mark scanning as complete
-      
-      setTimeout(() => {
+      // Update status based on whether cancelled or completed
+      if (cancelRequestedRef.current) {
         setStatus("idle")
         setProgress(0)
-        setCurrentFile("")
-        // Only clear files if queue is empty (all files processed)
-        if (scanQueue.length === 0) {
-          setFiles([])
-        }
-        setScanQueue([])
-        setCurrentFileIndex(0)
-        setCurrentBatch({ start: 0, end: 0 })
-        setBatchProgress({ current: 0, total: 0 })
-      }, 2000)
+        setCurrentFile("ยกเลิกการสแกนแล้ว")
+        setError("")
+        setIsScanning(false)
+        setCancelRequested(true) // Update state for UI
+        cancelRequestedRef.current = false // Reset ref
+        scanStartTimeRef.current = null // Stop timer
+        
+        // Keep remaining files in the queue (don't remove them)
+        // Only clear scan queue and progress, but keep files list
+        setTimeout(() => {
+          setCurrentFile("")
+          setCancelRequested(false) // Reset state after timeout
+          setElapsedTime(0) // Reset timer
+          // Don't clear files - keep remaining files for user to scan again
+          // Only clear scan queue and progress
+          setScanQueue([])
+          setCurrentFileIndex(0)
+          setCurrentBatch({ start: 0, end: 0 })
+          setBatchProgress({ current: 0, total: 0 })
+        }, 2000)
+      } else {
+        setStatus("success")
+        setProgress(100)
+        setIsScanning(false) // Mark scanning as complete
+        scanStartTimeRef.current = null // Stop timer
+        
+        setTimeout(() => {
+          setStatus("idle")
+          setProgress(0)
+          setCurrentFile("")
+          setElapsedTime(0) // Reset timer
+          // Only clear files if queue is empty (all files processed)
+          if (scanQueue.length === 0) {
+            setFiles([])
+          }
+          setScanQueue([])
+          setCurrentFileIndex(0)
+          setCurrentBatch({ start: 0, end: 0 })
+          setBatchProgress({ current: 0, total: 0 })
+        }, 2000)
+      }
     } catch (err) {
       console.error("❌ [BatchScan] Export Error:", err)
       setError(`เกิดข้อผิดพลาด: ${err.message}`)
       setStatus("idle")
       setProgress(0)
       setCurrentFile("")
+      setScanStartTime(null) // Stop timer
+      setElapsedTime(0) // Reset timer
     }
   }
 
@@ -817,34 +1063,14 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
     try {
       console.log(`🚀 Starting batch scan process...`)
       console.log(`📊 Total files: ${queue.length}, Total pages in files: ${totalPages}, Pages to scan: ${totalPagesToScan}`)
+      console.log(`💳 Current credits: ${credits}`)
       
-      // อัปเดตเครดิต Firestore ก่อน (ใช้จำนวนหน้าที่จะสแกนจริง)
-      console.log(`💳 Updating credits: ${credits} -> ${credits - totalPagesToScan}`)
-      setCurrentFile("กำลังอัปเดตเครดิต...")
       setProgress(5)
       
-      const newCredits = credits - totalPagesToScan
-      try {
-        await updateUserCredits(user.uid, newCredits)
-        console.log(`✅ Credits updated successfully`)
-        if (onConsume) {
-          onConsume(totalPagesToScan)
-        }
-      } catch (creditError) {
-        console.error(`❌ Failed to update credits:`, creditError)
-        setError(`ไม่สามารถอัปเดตเครดิตได้: ${creditError.message}. กรุณาลองใหม่อีกครั้ง`)
-        setStatus("idle")
-        setIsScanning(false)
-        setProgress(0)
-        setCurrentFile("")
-        return
-      }
-      
-      setProgress(10)
-      
       // Use batch scan controller (handles all files, batches, and Excel export)
+      // Credits will be deducted per file inside scanSingleFile
       // Pass queue directly to avoid React state async update issue
-      await runScanQueue(queue)
+      await runScanQueue(queue, credits, onConsume)
     } catch (err) {
       console.error("❌ Export Error:", err)
       setError(`เกิดข้อผิดพลาด: ${err.message}`)
@@ -852,6 +1078,8 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
       setIsScanning(false)
       setProgress(0)
       setCurrentFile("")
+      setScanStartTime(null) // Stop timer
+      setElapsedTime(0) // Reset timer
     }
   }
 
@@ -1400,9 +1628,22 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
                             value={progress} 
                             sx={{ height: 6, borderRadius: 3, mb: 1 }}
                           />
-                          <Typography variant="caption" color="text.secondary">
-                            {Math.round(progress)}% เสร็จสมบูรณ์
-                          </Typography>
+                          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <Typography variant="caption" color="text.secondary">
+                              {Math.round(progress)}% เสร็จสมบูรณ์
+                            </Typography>
+                            <Typography 
+                              variant="caption" 
+                              sx={{ 
+                                color: "#3b82f6",
+                                fontWeight: 600,
+                                fontFamily: "monospace",
+                                fontSize: "0.875rem"
+                              }}
+                            >
+                              ⏱️ {formatTime(elapsedTime)}
+                            </Typography>
+                          </Box>
                         </Box>
                       )}
 
@@ -1419,38 +1660,64 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
                         </Alert>
                       )}
 
-                      {/* Action Button */}
-                      <Button
-                        variant="contained"
-                        fullWidth
-                        size="large"
-                        startIcon={status === "running" ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />}
-                        disabled={!creditEnough || status === "running" || !selectedTemplateId}
-                        onClick={handleRun}
-                        sx={{
-                          background: creditEnough && status !== "running" && selectedTemplateId
-                            ? "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)"
-                            : "linear-gradient(135deg, #94a3b8 0%, #64748b 100%)",
-                          boxShadow: creditEnough && status !== "running" && selectedTemplateId
-                            ? "0 4px 12px rgba(59, 130, 246, 0.3)"
-                            : "none",
-                          "&:hover": {
+                      {/* Action Buttons */}
+                      <Stack spacing={2}>
+                        <Button
+                          variant="contained"
+                          fullWidth
+                          size="large"
+                          startIcon={status === "running" ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />}
+                          disabled={!creditEnough || status === "running" || !selectedTemplateId}
+                          onClick={handleRun}
+                          sx={{
                             background: creditEnough && status !== "running" && selectedTemplateId
-                              ? "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)"
+                              ? "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)"
                               : "linear-gradient(135deg, #94a3b8 0%, #64748b 100%)",
                             boxShadow: creditEnough && status !== "running" && selectedTemplateId
-                              ? "0 6px 16px rgba(59, 130, 246, 0.4)"
+                              ? "0 4px 12px rgba(59, 130, 246, 0.3)"
                               : "none",
-                          },
-                          py: 1.5,
-                          fontSize: "1rem",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {status === "running" 
-                          ? "กำลังประมวลผล..." 
-                          : "สแกนและบันทึกไฟล์"}
-                      </Button>
+                            "&:hover": {
+                              background: creditEnough && status !== "running" && selectedTemplateId
+                                ? "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)"
+                                : "linear-gradient(135deg, #94a3b8 0%, #64748b 100%)",
+                              boxShadow: creditEnough && status !== "running" && selectedTemplateId
+                                ? "0 6px 16px rgba(59, 130, 246, 0.4)"
+                                : "none",
+                            },
+                            py: 1.5,
+                            fontSize: "1rem",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {status === "running" 
+                            ? "กำลังประมวลผล..." 
+                            : "สแกนและบันทึกไฟล์"}
+                        </Button>
+                        
+                        {/* Cancel Button - Only show when scanning */}
+                        {status === "running" && (
+                          <Button
+                            variant="outlined"
+                            fullWidth
+                            size="large"
+                            startIcon={<CancelIcon />}
+                            onClick={handleCancelScan}
+                            sx={{
+                              borderColor: "#ef4444",
+                              color: "#ef4444",
+                              "&:hover": {
+                                borderColor: "#dc2626",
+                                backgroundColor: "#fef2f2",
+                              },
+                              py: 1.5,
+                              fontSize: "1rem",
+                              fontWeight: 600,
+                            }}
+                          >
+                            ยกเลิกการสแกน
+                          </Button>
+                        )}
+                      </Stack>
                       {!creditEnough && (
                         <Typography variant="body2" sx={{ mt: 2, color: "#ef4444", textAlign: "center" }}>
                           เครดิตไม่เพียงพอ
@@ -1469,6 +1736,152 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
           </Grid>
         </Grid>
       </Box>
+
+      {/* Cancel Scan Confirmation Dialog */}
+      <Dialog
+        open={showCancelDialog}
+        onClose={handleCancelCancel}
+        TransitionComponent={Slide}
+        TransitionProps={{ direction: "down", timeout: 300 }}
+        disableEnforceFocus={true}
+        disableRestoreFocus={true}
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+            overflow: "hidden",
+            minWidth: 400,
+            maxWidth: 500,
+          },
+        }}
+      >
+        <Slide direction="down" in={showCancelDialog} timeout={300}>
+          <Box>
+            <DialogTitle
+              sx={{
+                background: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)",
+                color: "#fff",
+                display: "flex",
+                alignItems: "center",
+                gap: 1.5,
+                py: 2.5,
+                px: 3,
+                position: "relative",
+              }}
+            >
+              <Box
+                sx={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: "50%",
+                  backgroundColor: "rgba(255,255,255,0.2)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <WarningIcon sx={{ fontSize: 24 }} />
+              </Box>
+              <Box sx={{ flex: 1 }}>
+                <Typography variant="h6" fontWeight={600}>
+                  ยืนยันการยกเลิกการสแกน
+                </Typography>
+              </Box>
+              <IconButton
+                onClick={handleCancelCancel}
+                sx={{
+                  color: "#fff",
+                  "&:hover": {
+                    backgroundColor: "rgba(255,255,255,0.1)",
+                  },
+                }}
+                size="small"
+              >
+                <CloseIcon />
+              </IconButton>
+            </DialogTitle>
+            <DialogContent sx={{ p: 3, pt: 3 }}>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 2,
+                  mb: 1,
+                }}
+              >
+                <WarningIcon
+                  sx={{
+                    fontSize: 32,
+                    color: "#f59e0b",
+                    mt: 0.5,
+                  }}
+                />
+                <Box>
+                  <Typography variant="body1" fontWeight={600} sx={{ mb: 1, color: "#1e293b" }}>
+                    ต้องสแกนไฟล์นี้ให้เสร็จก่อน ถึงจะยกเลิกได้
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: "#64748b", lineHeight: 1.7, mb: 1 }}>
+                    ระบบจะสแกนไฟล์ปัจจุบันให้เสร็จก่อน แล้วจึงจะหยุดการสแกน
+                  </Typography>
+                  <Alert severity="warning" sx={{ mt: 1, fontSize: "0.875rem" }}>
+                    <Typography variant="body2" sx={{ fontSize: "0.875rem" }}>
+                      การปิดหน้าจออาจเสียเครดิตไปโดยไม่ได้ไฟล์ Excel
+                    </Typography>
+                  </Alert>
+                </Box>
+              </Box>
+            </DialogContent>
+            <DialogActions
+              sx={{
+                p: 2.5,
+                px: 3,
+                gap: 1.5,
+                borderTop: "1px solid #e2e8f0",
+              }}
+            >
+              <Button
+                onClick={handleCancelCancel}
+                variant="outlined"
+                sx={{
+                  textTransform: "none",
+                  px: 3,
+                  py: 1,
+                  borderRadius: 2,
+                  borderColor: "#cbd5e1",
+                  color: "#475569",
+                  "&:hover": {
+                    borderColor: "#94a3b8",
+                    backgroundColor: "#f1f5f9",
+                  },
+                }}
+              >
+                ยกเลิก
+              </Button>
+              <Button
+                onClick={handleConfirmCancel}
+                variant="contained"
+                startIcon={<CancelIcon />}
+                sx={{
+                  textTransform: "none",
+                  px: 3,
+                  py: 1,
+                  borderRadius: 2,
+                  background: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)",
+                  boxShadow: "0 4px 12px rgba(245, 158, 11, 0.3)",
+                  "&:hover": {
+                    background: "linear-gradient(135deg, #d97706 0%, #b45309 100%)",
+                    boxShadow: "0 6px 16px rgba(245, 158, 11, 0.4)",
+                    transform: "translateY(-1px)",
+                  },
+                  transition: "all 0.2s ease",
+                }}
+              >
+                ตกลง
+              </Button>
+            </DialogActions>
+          </Box>
+        </Slide>
+      </Dialog>
     </Box>
   )
 }

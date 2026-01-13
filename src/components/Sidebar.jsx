@@ -19,18 +19,30 @@ import LogoutIcon from "@mui/icons-material/Logout"
 import { auth } from "../firebase"
 import { getUserProfile } from "../services/user.service"
 
-export default function Sidebar({ page, onNavigate, onLogout }) {
+export default function Sidebar({ page, onNavigate, onLogout, credits: creditsFromProps }) {
   const user = auth.currentUser
-  const [credits, setCredits] = useState(0)
-  const [loadingCredits, setLoadingCredits] = useState(true)
+  const [credits, setCredits] = useState(creditsFromProps || 0)
+  const [loadingCredits, setLoadingCredits] = useState(false)
 
-  // โหลด credits จาก Firebase
+  // Update credits when props change (from parent App.jsx)
+  useEffect(() => {
+    if (creditsFromProps !== undefined) {
+      setCredits(creditsFromProps)
+    }
+  }, [creditsFromProps])
+
+  // โหลด credits จาก Firebase เป็น fallback (ถ้าไม่มี props)
   useEffect(() => {
     let isMounted = true
     
     if (!user) {
       setCredits(0)
       setLoadingCredits(false)
+      return
+    }
+
+    // ถ้ามี credits จาก props แล้ว ไม่ต้องโหลดจาก Firebase
+    if (creditsFromProps !== undefined) {
       return
     }
 
@@ -61,9 +73,9 @@ export default function Sidebar({ page, onNavigate, onLogout }) {
 
     loadCredits()
 
-    // Refresh credits ทุก 10 วินาที
+    // Refresh credits ทุก 10 วินาที (ถ้าไม่มี props)
     const interval = setInterval(() => {
-      if (isMounted && user) {
+      if (isMounted && user && creditsFromProps === undefined) {
         loadCredits()
       }
     }, 10000)
@@ -72,7 +84,7 @@ export default function Sidebar({ page, onNavigate, onLogout }) {
       isMounted = false
       clearInterval(interval)
     }
-  }, [user])
+  }, [user, creditsFromProps])
 
   const menu = [
     { key: "home", label: "หน้าแรก", icon: <HomeIcon /> },

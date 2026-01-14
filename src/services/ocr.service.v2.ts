@@ -107,7 +107,7 @@ export async function ocrImageV2(imageFile: File, rotation?: number) {
  * @param scanMode - If true, scan all pages and don't return normalized image. If false, scan first page only and return normalized image (for template setup)
  * @returns OCRResult with words array and page dimensions
  */
-export async function ocrPdfV2(pdfFile: File, rotation?: number, scanMode: boolean | string = false, options?: { pageRange?: string; startPage?: number; endPage?: number }) {
+export async function ocrPdfV2(pdfFile: File, rotation?: number, scanMode: boolean | string = false, options?: { pageRange?: string; startPage?: number; endPage?: number; sessionId?: string }) {
   try {
     console.log(`📄 [OCR V2] Converting PDF to base64: ${pdfFile.name}, scanMode: ${scanMode}`)
     const pdfBase64 = await fileToBase64(pdfFile)
@@ -143,6 +143,12 @@ export async function ocrPdfV2(pdfFile: File, rotation?: number, scanMode: boole
         requestBody.pageRange = options.pageRange
         console.log(`📄 [OCR V2] Sending page range: ${options.pageRange}`)
       }
+    }
+    
+    // Include sessionId if provided (for status tracking)
+    if (options?.sessionId) {
+      requestBody.sessionId = options.sessionId
+      console.log(`📋 [OCR V2] Sending sessionId: ${options.sessionId}`)
     }
     
     console.log(`🌐 [OCR V2] Calling OCR V2 API for PDF...`, {
@@ -265,7 +271,7 @@ export async function ocrPdfV2(pdfFile: File, rotation?: number, scanMode: boole
  * @param scanMode - If true, scan all pages and don't return normalized image. If false, scan first page only and return normalized image (for template setup)
  * @returns OCRResult with words array and page dimensions
  */
-export async function ocrFileV2(file: File, rotation?: number, scanMode: boolean | string = false, options?: { pageRange?: string; startPage?: number; endPage?: number }) {
+export async function ocrFileV2(file: File, rotation?: number, scanMode: boolean | string = false, options?: { pageRange?: string; startPage?: number; endPage?: number; sessionId?: string }) {
   const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")
   
   if (isPdf) {

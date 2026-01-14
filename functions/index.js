@@ -52,6 +52,7 @@ admin.initializeApp();
 
 const visionClient = new vision.ImageAnnotatorClient();
 const storage = new Storage();
+const db = admin.firestore();
 
 // 🔒 ใช้ bucket ที่สร้างไว้ล่วงหน้าเท่านั้น (ถ้ามี)
 const BUCKET_NAME = process.env.GCS_BUCKET || "ocr-system-c3bea-ocr-temp";
@@ -59,6 +60,36 @@ const BUCKET_NAME = process.env.GCS_BUCKET || "ocr-system-c3bea-ocr-temp";
 // ---------- UTIL ----------
 function randomId() {
   return crypto.randomBytes(16).toString("hex");
+}
+
+// ---------- FIRESTORE STATUS UPDATER ----------
+/**
+ * Update scan status in Firestore
+ * @param {string} sessionId - Session ID for tracking
+ * @param {string} status - Status: "detecting_orientation" | "rotating" | "scanning_ocr" | "completed" | "error"
+ * @param {number} pageNumber - Current page number
+ * @param {string} message - Status message
+ * @param {object} extraData - Extra data (e.g., rotation angle)
+ */
+async function updateScanStatus(sessionId, status, pageNumber, message, extraData = {}) {
+  if (!sessionId) {
+    return; // Skip if no sessionId
+  }
+  
+  try {
+    const statusRef = db.collection("scanStatus").doc(sessionId);
+    await statusRef.set({
+      status,
+      pageNumber,
+      message,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      ...extraData,
+    }, { merge: true });
+    console.log(`📊 [Status] Updated: ${status} - Page ${pageNumber} - ${message}`);
+  } catch (error) {
+    console.error(`❌ [Status] Failed to update status:`, error);
+    // Don't throw - status update failure shouldn't break OCR
+  }
 }
 
 // ---------- OCR IMAGE (BASE64) ----------
@@ -322,7 +353,7 @@ const { parsePageRange } = require("./utils/parsePageRange");
  * @param {number|null} manualRotation - Manual rotation (0, 90, 180, 270) or null for auto-detect
  * @returns {Promise<OCRResult|null>} OCR result for this page, or null if page not found
  */
-async function scanSinglePage(pdfBuffer, pageNumber, fileName, manualRotation = null) {
+async function scanSinglePage(pdfBuffer, pageNumber, fileName, manualRotation = null, sessionId = null) {
   try {
     console.log(`📄 [ScanMode: perPage] Processing page ${pageNumber}`);
     
@@ -334,14 +365,34 @@ async function scanSinglePage(pdfBuffer, pageNumber, fileName, manualRotation = 
     
     if (!normalizedPages || normalizedPages.length === 0) {
       console.warn(`⚠️ [ScanMode: perPage] Page ${pageNumber} not found`);
+      if (sessionId) {
+        await updateScanStatus(sessionId, "error", pageNumber, `หน้า ${pageNumber} ไม่พบ`);
+      }
       return null;
     }
     
     const page = normalizedPages[0];
     console.log(`📄 [ScanMode: perPage] Page ${pageNumber}: ${page.width}x${page.height}`);
     
+    // Update status: detecting orientation
+    if (sessionId) {
+      await updateScanStatus(sessionId, "detecting_orientation", pageNumber, `กำลังตรวจสอบทิศทางภาพ: หน้า ${pageNumber}`);
+    }
+    
     // Normalize image (use manual rotation if provided, otherwise auto-detect)
     const normalized = await normalizeImage(page.imageBuffer, `${fileName}-page-${pageNumber}`, manualRotation);
+    
+    // Update status: rotating (if rotation was applied)
+    if (sessionId && normalized.rotation !== 0) {
+      await updateScanStatus(sessionId, "rotating", pageNumber, `กำลังหมุนภาพ: หน้า ${pageNumber} (${normalized.rotation}°)`, {
+        rotation: normalized.rotation,
+      });
+    }
+    
+    // Update status: scanning OCR
+    if (sessionId) {
+      await updateScanStatus(sessionId, "scanning_ocr", pageNumber, `กำลังสแกน OCR: หน้า ${pageNumber}`);
+    }
     
     // OCR normalized image
     const ocrResult = await ocrImageBufferV2(normalized.imageBuffer, `${fileName}-page-${pageNumber}`);
@@ -355,16 +406,27 @@ async function scanSinglePage(pdfBuffer, pageNumber, fileName, manualRotation = 
     // IMPORTANT: Words are already sorted by Y then X in ocrImageBufferV2
     // No need to sort again - words are in reading order (top → bottom, left → right)
     
+    // Update status: completed
+    if (sessionId) {
+      await updateScanStatus(sessionId, "completed", pageNumber, `เสร็จสิ้น: หน้า ${pageNumber}`, {
+        wordsCount: ocrResult.words?.length || 0,
+      });
+    }
+    
     console.log(`✅ [ScanMode: perPage] Page ${pageNumber}: Completed, ${ocrResult.words?.length || 0} words`);
     
     return ocrResult;
   } catch (error) {
     console.error(`❌ [ScanMode: perPage] Error processing page ${pageNumber}:`, error);
+    if (sessionId) {
+      await updateScanStatus(sessionId, "error", pageNumber, `เกิดข้อผิดพลาด: หน้า ${pageNumber} - ${error.message}`);
+    }
     throw error;
   }
 }
 
 async function ocrPdfBase64V2(pdfBase64, fileName = "input.pdf", manualRotation = null, scanMode = false, options = {}) {
+  const sessionId = options?.sessionId || null; // Get sessionId from options
   try {
     // Normalize scanMode: support both boolean (backward compatible) and string ("batch"/"perPage")
     // Default to "batch" for backward compatibility
@@ -544,7 +606,7 @@ async function ocrPdfBase64V2(pdfBase64, fileName = "input.pdf", manualRotation 
       console.log(`📄 [ScanMode: perPage] Processing page ${pageNum}...`);
       
       try {
-        const pageResult = await scanSinglePage(pdfBuffer, pageNum, fileName, manualRotation);
+        const pageResult = await scanSinglePage(pdfBuffer, pageNum, fileName, manualRotation, sessionId);
         
         if (pageResult) {
           results.push({
@@ -989,6 +1051,7 @@ exports.ocrImageV2 = onRequest(
           const pageRange = req.body.pageRange; // Optional: page range string like "1,2-6,20-22"
           const startPage = req.body.startPage; // Optional: start page number (1-based, inclusive)
           const endPage = req.body.endPage; // Optional: end page number (1-based, inclusive)
+          const sessionId = req.body.sessionId || null; // Optional: session ID for status tracking
           
           // Debug: Log what we received
           console.log(`📋 [OCR V2] Request body keys:`, Object.keys(req.body));
@@ -1030,6 +1093,12 @@ exports.ocrImageV2 = onRequest(
             console.log(`📋 [OCR V2] No page options provided, ocrOptions is empty:`, ocrOptions);
           }
           // If neither is provided, ocrOptions is {} = all pages (NON-BREAKING)
+          
+          // Add sessionId to options if provided
+          if (sessionId) {
+            ocrOptions.sessionId = sessionId;
+            console.log(`📋 [OCR V2] Added sessionId to options: ${sessionId}`);
+          }
           
           const ocrResult = await ocrPdfBase64V2(
             req.body.pdf_base64,

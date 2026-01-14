@@ -35,8 +35,9 @@ import CancelIcon from "@mui/icons-material/Cancel"
 import WarningIcon from "@mui/icons-material/Warning"
 import { Slide } from "@mui/material"
 import { getPdfPageCount, isPdfFile } from "../services/pdf.service"
-import { auth } from "../firebase"
+import { auth, db } from "../firebase"
 import { updateUserCredits, getUserProfile, deductCreditsFromFirebase } from "../services/user.service"
+import { doc, getDoc } from "firebase/firestore"
 // Removed: import { ocrFile } from "../services/ocr.service" - not used, using runOCR (v2) instead
 import { extractDataFromText } from "../services/textProcessor.service"
 import {
@@ -189,6 +190,9 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
   const cancelRequestedRef = useRef(false) // Ref to track cancellation in async functions
   const scanStartTimeRef = useRef(null) // Start time of scanning (use ref for immediate access)
   const [elapsedTime, setElapsedTime] = useState(0) // Elapsed time in seconds
+  const [currentSessionId, setCurrentSessionId] = useState(null) // Current scan session ID
+  const [scanStatus, setScanStatus] = useState(null) // Current scan status from Firestore
+  const statusPollingIntervalRef = useRef(null) // Ref for status polling interval
 
   const handleSelect = async (fileList) => {
     try {
@@ -413,6 +417,64 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
     }
   }
 
+  // Generate session ID
+  const generateSessionId = () => {
+    return `scan_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`
+  }
+
+  // Poll Firestore for scan status
+  const pollScanStatus = async (sessionId) => {
+    if (!sessionId) return
+    
+    try {
+      const statusRef = doc(db, "scanStatus", sessionId)
+      const statusSnap = await getDoc(statusRef)
+      
+      if (statusSnap.exists()) {
+        const statusData = statusSnap.data()
+        setScanStatus(statusData)
+        console.log(`📊 [Status] Polled status:`, statusData)
+      } else {
+        console.log(`📊 [Status] No status document found for session: ${sessionId}`)
+      }
+    } catch (error) {
+      console.error(`❌ [Status] Failed to poll status:`, error)
+    }
+  }
+
+  // Start status polling
+  const startStatusPolling = (sessionId) => {
+    // Clear existing interval if any
+    if (statusPollingIntervalRef.current) {
+      clearInterval(statusPollingIntervalRef.current)
+    }
+    
+    // Poll immediately
+    pollScanStatus(sessionId)
+    
+    // Poll every 2 seconds
+    statusPollingIntervalRef.current = setInterval(() => {
+      pollScanStatus(sessionId)
+    }, 2000)
+  }
+
+  // Stop status polling
+  const stopStatusPolling = () => {
+    if (statusPollingIntervalRef.current) {
+      clearInterval(statusPollingIntervalRef.current)
+      statusPollingIntervalRef.current = null
+    }
+    setScanStatus(null)
+    setCurrentSessionId(null)
+  }
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      stopStatusPolling()
+    }
+  }, [])
+
   /**
    * Scan a single file using batch processing (perPage mode)
    * Processes pages in batches of BATCH_SIZE
@@ -478,6 +540,11 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
       console.log(`📄 [BatchScan] Processing batch: pages ${startPage}-${endPage} (${batchPages.length} pages)`)
       
       try {
+        // Generate session ID for this batch
+        const batchSessionId = generateSessionId()
+        setCurrentSessionId(batchSessionId)
+        startStatusPolling(batchSessionId)
+        
         // Call OCR API with perPage mode
         const runOCRResult = await runOCR(fileState.file, {
           scanMode: "perPage", // Use perPage mode for batch processing
@@ -485,6 +552,7 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
           userProfile: user ? { enableTemplateMode: true } : null,
           startPage: startPage,
           endPage: endPage,
+          sessionId: batchSessionId, // Send sessionId for status tracking
         })
         
         // Handle perPage response format
@@ -958,20 +1026,22 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
         // Only clear scan queue and progress, but keep files list
         setTimeout(() => {
           setCurrentFile("")
-          setCancelRequested(false) // Reset state after timeout
-          setElapsedTime(0) // Reset timer
-          // Don't clear files - keep remaining files for user to scan again
-          // Only clear scan queue and progress
-          setScanQueue([])
-          setCurrentFileIndex(0)
-          setCurrentBatch({ start: 0, end: 0 })
-          setBatchProgress({ current: 0, total: 0 })
+        setCancelRequested(false) // Reset state after timeout
+        setElapsedTime(0) // Reset timer
+        stopStatusPolling() // Stop polling status
+        // Don't clear files - keep remaining files for user to scan again
+        // Only clear scan queue and progress
+        setScanQueue([])
+        setCurrentFileIndex(0)
+        setCurrentBatch({ start: 0, end: 0 })
+        setBatchProgress({ current: 0, total: 0 })
         }, 2000)
       } else {
         setStatus("success")
         setProgress(100)
         setIsScanning(false) // Mark scanning as complete
         scanStartTimeRef.current = null // Stop timer
+        stopStatusPolling() // Stop polling status
         
         setTimeout(() => {
           setStatus("idle")
@@ -996,6 +1066,7 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
       setCurrentFile("")
       setScanStartTime(null) // Stop timer
       setElapsedTime(0) // Reset timer
+      stopStatusPolling() // Stop polling status
     }
   }
 
@@ -1621,6 +1692,21 @@ export default function Scan({ credits, files, setFiles, onNext, columnConfig, o
                           {currentBatch.start > 0 && currentBatch.end > 0 && batchProgress.current < batchProgress.total && (
                             <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: "0.75rem", fontStyle: "italic" }}>
                               กำลังประมวลผล: หน้า {currentBatch.start}–{currentBatch.end}
+                            </Typography>
+                          )}
+                          {/* Display scan status from Firestore */}
+                          {scanStatus && scanStatus.message && (
+                            <Typography 
+                              variant="body2" 
+                              sx={{ 
+                                mb: 1, 
+                                fontSize: "0.875rem",
+                                color: scanStatus.status === "error" ? "#ef4444" : "#3b82f6",
+                                fontWeight: 500,
+                                fontStyle: "italic"
+                              }}
+                            >
+                              📍 {scanStatus.message}
                             </Typography>
                           )}
                           <LinearProgress 

@@ -28,6 +28,8 @@ export interface RunOCROptions {
   userProfile?: UserProfile | null
   /** Timeout in milliseconds (default: 5 minutes) */
   timeout?: number
+  /** Session ID for status tracking (optional) */
+  sessionId?: string | null
 }
 
 /**
@@ -67,6 +69,7 @@ export async function runOCR(
     template = null,
     userProfile = null,
     timeout = 5 * 60 * 1000, // 5 minutes default
+    sessionId = null,
   } = options
 
   console.log("🔍 [runOCR] Starting OCR with unified pipeline...")
@@ -88,6 +91,7 @@ export async function runOCR(
     pageRange?: string | number[]
     startPage?: number
     endPage?: number
+    sessionId?: string
   } = {}
 
   if (startPage !== undefined || endPage !== undefined) {
@@ -99,6 +103,12 @@ export async function runOCR(
     // Fallback: pageRange
     ocrOptions.pageRange = pageRange
     console.log(`📄 [runOCR] Using pageRange: ${pageRange}`)
+  }
+  
+  // Add sessionId if provided
+  if (sessionId) {
+    ocrOptions.sessionId = sessionId
+    console.log(`📋 [runOCR] Using sessionId: ${sessionId}`)
   }
 
   let ocrResult: OCRResult
